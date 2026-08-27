@@ -96,7 +96,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const colors = ['#000000', '#1e293b', '#dc2626', '#16a34a', '#2563eb', '#ca8a04', '#9333ea', '#ffffff'];
 
   return (
-    <div className="sticky top-14 z-30 flex items-center justify-center w-full px-4 bg-gray-50/90 backdrop-blur-md border-b border-gray-200 select-none relative h-13">
+    <div className="sticky top-14 z-30 flex items-center justify-start sm:justify-center w-full px-2 sm:px-4 bg-gray-50/95 backdrop-blur-md border-b border-gray-200 select-none relative h-13 overflow-x-auto no-scrollbar">
       <input
         type="file"
         ref={imageInputRef}
@@ -106,7 +106,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       />
 
       {/* Main Tool Bar (Bharat Job Style) */}
-      <div className="inline-flex items-center bg-white rounded-xl shadow-md border border-gray-200 p-1 divide-x divide-gray-100 text-xs sm:text-sm font-medium text-gray-700">
+      <div className="inline-flex items-center bg-white rounded-xl shadow-md border border-gray-200 p-1 divide-x divide-gray-100 text-xs sm:text-sm font-medium text-gray-700 shrink-0 mx-auto sm:mx-0">
         
         {/* TEXT TOOL */}
         <div className="relative">
@@ -370,7 +370,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Dynamic Element Styling Sub-Bar when an element is selected */}
       {selectedElement && (
-        <div className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 inline-flex items-center bg-white/95 backdrop-blur-xs rounded-xl shadow-xl border border-emerald-300/80 px-3 py-1.5 space-x-3 text-xs z-50 animate-in fade-in slide-in-from-top-1 duration-150 whitespace-nowrap">
+        <div className="fixed sm:absolute top-[7.25rem] sm:top-full mt-1.5 left-1/2 -translate-x-1/2 inline-flex items-center bg-white/95 backdrop-blur-xs rounded-xl shadow-xl border border-emerald-300/80 px-2.5 sm:px-3 py-1.5 space-x-2 sm:space-x-3 text-xs z-50 animate-in fade-in slide-in-from-top-1 duration-150 whitespace-nowrap max-w-[96vw] overflow-x-auto no-scrollbar">
           
           {/* Element Type Indicator */}
           <span className="font-semibold text-emerald-700 uppercase tracking-wider text-2xs bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">

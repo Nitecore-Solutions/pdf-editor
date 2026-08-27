@@ -50,6 +50,14 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
+
+  // Auto-fit zoom on mobile screens
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640) {
+      const fit = Math.max(0.4, Math.min(0.9, (window.innerWidth - 32) / 595));
+      setZoom(Math.round(fit * 100) / 100);
+    }
+  }, []);
   // Track the page currently visible in the scroll area
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const mainScrollRef = React.useRef<HTMLDivElement>(null);
@@ -359,7 +367,7 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       />
 
       {/* Multi-Page Canvas Scroll Area */}
-      <main ref={mainScrollRef} className="flex-1 overflow-y-auto px-4 py-8 flex flex-col items-center pb-36"
+      <main ref={mainScrollRef} className="flex-1 overflow-y-auto overflow-x-auto px-2 sm:px-4 py-4 sm:py-8 flex flex-col items-center pb-28 sm:pb-36 w-full"
         onScroll={() => {
           // Detect which page is most visible in the scroll container
           const container = mainScrollRef.current;
@@ -406,40 +414,40 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       </main>
 
       {/* Sticky Bottom Bar (Apply changes >) */}
-      <footer className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-gray-200 py-3.5 px-6 z-40 shadow-2xl flex items-center justify-between">
-        <div className="flex items-center space-x-3 text-xs text-gray-500">
+      <footer className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-gray-200 py-2.5 sm:py-3.5 px-3 sm:px-6 z-40 shadow-2xl flex items-center justify-between">
+        <div className="flex items-center space-x-2 sm:space-x-3 text-2xs sm:text-xs text-gray-500">
           <span className="font-medium text-gray-700">
             {pages.length} {pages.length === 1 ? 'Page' : 'Pages'}
           </span>
           <span>•</span>
-          <span>
-            {elements.length} {elements.length === 1 ? 'change' : 'changes'} applied
+          <span className="truncate max-w-[120px] sm:max-w-none">
+            {elements.length} {elements.length === 1 ? 'change' : 'changes'}
           </span>
         </div>
 
         {/* Big Green "Apply changes >" Action Button */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2 sm:space-x-4">
           {exportSuccess && (
-            <div className="flex items-center space-x-1.5 text-xs text-emerald-600 font-semibold animate-in fade-in">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Downloaded successfully!</span>
+            <div className="flex items-center space-x-1 sm:space-x-1.5 text-2xs sm:text-xs text-emerald-600 font-semibold animate-in fade-in">
+              <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span className="hidden xs:inline">Downloaded!</span>
             </div>
           )}
 
           <button
             onClick={handleApplyChanges}
             disabled={isExporting}
-            className="flex items-center space-x-2 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold text-sm sm:text-base px-7 py-3 rounded-xl shadow-lg shadow-emerald-500/25 transition duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center space-x-1.5 sm:space-x-2 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold text-xs sm:text-base px-4 sm:px-7 py-2 sm:py-3 rounded-lg sm:rounded-xl shadow-md sm:shadow-lg shadow-emerald-500/25 transition duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isExporting ? (
               <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Processing PDF...</span>
+                <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                <span>Processing...</span>
               </>
             ) : (
               <>
                 <span>Apply changes</span>
-                <ArrowRight className="w-4 h-4" />
+                <ArrowRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </>
             )}
           </button>

@@ -375,27 +375,29 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     <div className="flex flex-col items-center my-6 select-none" id={`pdf-page-${pageInfo.pageIndex}`}>
       {/* Bharat Job Style Page Header Controls */}
       <div 
-        className="flex items-center justify-between mb-2 text-xs text-gray-600 bg-white/90 backdrop-blur-xs px-3 py-1.5 rounded-lg border border-gray-200 shadow-2xs"
+        className="flex items-center justify-between mb-2 text-xs text-gray-600 bg-white/90 backdrop-blur-xs px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg border border-gray-200 shadow-2xs max-w-full"
         style={{ width: `${displayedWidth}px` }}
       >
         {/* Left: Page Number */}
         <div className="flex items-center space-x-2">
-          <span className="font-bold text-gray-800 text-sm">{pageInfo.pageIndex + 1}</span>
+          <span className="font-bold text-gray-800 text-xs sm:text-sm">{pageInfo.pageIndex + 1}</span>
         </div>
 
         {/* Center: Page Action Icons */}
         <div className="flex items-center space-x-1">
           <button
             onClick={() => onDeletePage(pageInfo.pageIndex)}
-            className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition"
+            className="p-1 sm:p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer"
             title="Delete page"
+            aria-label="Delete page"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => onRotatePage(pageInfo.pageIndex)}
-            className="p-1 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
+            className="p-1 sm:p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded transition cursor-pointer"
             title="Rotate 90°"
+            aria-label="Rotate page"
           >
             <RotateCw className="w-3.5 h-3.5" />
           </button>
@@ -405,19 +407,19 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         <div className="flex items-center space-x-1">
           <button
             onClick={() => onInsertPageHere(pageInfo.pageIndex)}
-            className="flex items-center space-x-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-0.5 rounded transition border border-emerald-200 text-2xs font-semibold cursor-pointer"
+            className="flex items-center space-x-1 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-1.5 sm:px-2 py-0.5 rounded transition border border-emerald-200 text-2xs font-semibold cursor-pointer"
             title="Insert a blank page before this page"
           >
             <PlusCircle className="w-3 h-3" />
-            <span>Insert above</span>
+            <span className="hidden sm:inline">Insert above</span>
           </button>
           <button
             onClick={() => onInsertPageHere(pageInfo.pageIndex + 1)}
-            className="flex items-center space-x-1 text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-2 py-0.5 rounded transition border border-sky-200 text-2xs font-semibold cursor-pointer"
+            className="flex items-center space-x-1 text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-1.5 sm:px-2 py-0.5 rounded transition border border-sky-200 text-2xs font-semibold cursor-pointer"
             title="Insert a blank page after this page"
           >
             <PlusCircle className="w-3 h-3" />
-            <span>Insert below</span>
+            <span className="hidden sm:inline">Insert below</span>
           </button>
         </div>
       </div>
