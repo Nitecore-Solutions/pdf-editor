@@ -103,7 +103,7 @@ export async function exportModifiedPdf({
         else if (el.isItalic) fontToUse = helveticaOblique;
 
         // Convert UI font size (96 DPI CSS px) to PDF standard 72 pt font size
-        const fontSizePt = Math.max(6, (el.fontSize || 14) / 1.3333);
+        const fontSizePt = Math.max(4, (el.fontSize || 14) / 1.3333);
         const textColor = hexToRgb(el.color || '#000000');
         const lines = (el.text || '').split('\n');
         const lineHeight = fontSizePt * 1.2;

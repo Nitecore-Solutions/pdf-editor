@@ -672,7 +672,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                             textDecoration: el.isUnderline ? 'underline' : 'none',
                             textAlign: el.align || 'left',
                             fontFamily: el.fontFamily || 'Arial, Helvetica, sans-serif',
-                            lineHeight: 1.2,
+                            lineHeight: 1.15,
                             width: '100%',
                             minWidth: '40px',
                           }}
@@ -702,8 +702,8 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                           textDecoration: el.isUnderline ? 'underline' : 'none',
                           textAlign: el.align || 'left',
                           fontFamily: el.fontFamily || 'Arial, Helvetica, sans-serif',
-                          lineHeight: 1.2,
-                          height: `${(el.fontSize || 14) * zoom * 1.2}px`,
+                          lineHeight: 1.15,
+                          height: `${(el.fontSize || 14) * zoom * 1.15}px`,
                           width: '100%',
                           minWidth: '20px',
                         }}
