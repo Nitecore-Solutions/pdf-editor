@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Type, 
   Link as LinkIcon, 
@@ -75,24 +75,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onDeleteSelectedElement,
   onDuplicateSelectedElement,
 }) => {
-  const [openDropdown, setOpenDropdown] = useState<'forms' | 'annotate' | 'shapes' | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
-      if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) {
-        setOpenDropdown(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('touchstart', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('touchstart', handleClickOutside);
-    };
-  }, []);
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -102,7 +85,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   };
 
   return (
-    <div ref={toolbarRef} className="shrink-0 w-full bg-white border-b border-gray-200 select-none z-30 relative shadow-2xs">
+    <div className="shrink-0 w-full bg-white border-b border-gray-200 select-none z-30 relative shadow-2xs">
       <input
         type="file"
         ref={imageInputRef}
@@ -111,16 +94,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         className="hidden"
       />
 
-      {/* Main Tool Bar */}
+      {/* Main Primary Tool Bar */}
       <div className="flex items-center justify-start sm:justify-center w-full px-2 sm:px-4 py-1.5 overflow-x-auto no-scrollbar">
         <div className="inline-flex items-center bg-gray-50 rounded-xl border border-gray-200 p-1 text-xs sm:text-sm font-medium text-gray-700 space-x-0.5 sm:space-x-1 shrink-0">
           
           {/* TEXT TOOL */}
           <button
-            onClick={() => {
-              onSelectTool('text');
-              setOpenDropdown(null);
-            }}
+            onClick={() => onSelectTool('text')}
             className={`flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
               activeTool === 'text'
                 ? 'bg-emerald-500 text-white font-semibold shadow-xs'
@@ -133,10 +113,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* LINKS TOOL */}
           <button
-            onClick={() => {
-              onSelectTool('links');
-              setOpenDropdown(null);
-            }}
+            onClick={() => onSelectTool('links')}
             className={`flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
               activeTool === 'links'
                 ? 'bg-emerald-500 text-white font-semibold shadow-xs'
@@ -148,65 +125,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
 
           {/* FORMS TOOL */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                onSelectTool('forms');
-                setOpenDropdown(openDropdown === 'forms' ? null : 'forms');
-              }}
-              className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
-                activeTool === 'forms'
-                  ? 'bg-emerald-500 text-white font-semibold shadow-xs'
-                  : 'hover:bg-gray-200/70 text-gray-700'
-              }`}
-            >
-              <CheckSquare className="w-4 h-4" />
-              <span>Forms</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${openDropdown === 'forms' ? 'rotate-180' : ''}`} />
-            </button>
-
-            {openDropdown === 'forms' && (
-              <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-gray-200 p-1.5 z-50 flex flex-col space-y-1">
-                <button
-                  onClick={() => {
-                    onSelectTool('forms');
-                    onSelectFormSubtool('text');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'forms' && activeFormSubtool === 'text'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <span className="font-mono bg-gray-100 px-1 py-0.5 rounded border border-gray-300 text-2xs">abc</span>
-                  <span>Text Field</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectTool('forms');
-                    onSelectFormSubtool('checkbox');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'forms' && activeFormSubtool === 'checkbox'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <CheckSquare className="w-4 h-4 text-emerald-600" />
-                  <span>Checkbox</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => onSelectTool('forms')}
+            className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
+              activeTool === 'forms'
+                ? 'bg-emerald-500 text-white font-semibold shadow-xs'
+                : 'hover:bg-gray-200/70 text-gray-700'
+            }`}
+          >
+            <CheckSquare className="w-4 h-4" />
+            <span>Forms</span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+          </button>
 
           {/* IMAGES TOOL */}
           <button
-            onClick={() => {
-              setOpenDropdown(null);
-              imageInputRef.current?.click();
-            }}
+            onClick={() => imageInputRef.current?.click()}
             className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer hover:bg-gray-200/70 text-gray-700 shrink-0"
           >
             <ImageIcon className="w-4 h-4 text-purple-600" />
@@ -215,10 +149,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* SIGN TOOL */}
           <button
-            onClick={() => {
-              setOpenDropdown(null);
-              onOpenSignatureModal();
-            }}
+            onClick={onOpenSignatureModal}
             className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer hover:bg-gray-200/70 text-gray-700 shrink-0"
           >
             <PenTool className="w-4 h-4 text-blue-600" />
@@ -227,10 +158,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           {/* WHITEOUT TOOL */}
           <button
-            onClick={() => {
-              onSelectTool('whiteout');
-              setOpenDropdown(null);
-            }}
+            onClick={() => onSelectTool('whiteout')}
             className={`flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
               activeTool === 'whiteout'
                 ? 'bg-emerald-500 text-white font-semibold shadow-xs'
@@ -241,146 +169,36 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <span>Whiteout</span>
           </button>
 
-          {/* ANNOTATE TOOL (Pen / Highlighter) */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                onSelectTool('annotate');
-                setOpenDropdown(openDropdown === 'annotate' ? null : 'annotate');
-              }}
-              className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
-                activeTool === 'annotate'
-                  ? 'bg-emerald-500 text-white font-semibold shadow-xs'
-                  : 'hover:bg-gray-200/70 text-gray-700'
-              }`}
-            >
-              <Highlighter className="w-4 h-4 text-amber-500" />
-              <span>Annotate</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${openDropdown === 'annotate' ? 'rotate-180' : ''}`} />
-            </button>
-
-            {openDropdown === 'annotate' && (
-              <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-gray-200 p-1.5 z-50 flex flex-col space-y-1">
-                <button
-                  onClick={() => {
-                    onSelectTool('annotate');
-                    onSelectAnnotateSubtool('pen');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeAnnotateSubtool === 'pen' && activeTool === 'annotate'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <PenTool className="w-4 h-4 text-red-500" />
-                  <span>Freehand Pen</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectTool('annotate');
-                    onSelectAnnotateSubtool('highlighter');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeAnnotateSubtool === 'highlighter' && activeTool === 'annotate'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <Highlighter className="w-4 h-4 text-amber-500" />
-                  <span>Highlighter</span>
-                </button>
-              </div>
-            )}
-          </div>
+          {/* ANNOTATE TOOL */}
+          <button
+            onClick={() => onSelectTool('annotate')}
+            className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
+              activeTool === 'annotate'
+                ? 'bg-emerald-500 text-white font-semibold shadow-xs'
+                : 'hover:bg-gray-200/70 text-gray-700'
+            }`}
+          >
+            <Highlighter className="w-4 h-4 text-amber-500" />
+            <span>Annotate</span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+          </button>
 
           {/* SHAPES TOOL */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                onSelectTool('shapes');
-                setOpenDropdown(openDropdown === 'shapes' ? null : 'shapes');
-              }}
-              className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
-                activeTool === 'shapes'
-                  ? 'bg-emerald-500 text-white font-semibold shadow-xs'
-                  : 'hover:bg-gray-200/70 text-gray-700'
-              }`}
-            >
-              <Square className="w-4 h-4" />
-              <span>Shapes</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${openDropdown === 'shapes' ? 'rotate-180' : ''}`} />
-            </button>
-
-            {openDropdown === 'shapes' && (
-              <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-gray-200 p-1.5 z-50 flex flex-col space-y-1">
-                <button
-                  onClick={() => {
-                    onSelectTool('shapes');
-                    onSelectShapeSubtool('rectangle');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'shapes' && activeShapeSubtool === 'rectangle'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <Square className="w-4 h-4" />
-                  <span>Rectangle</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectTool('shapes');
-                    onSelectShapeSubtool('circle');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'shapes' && activeShapeSubtool === 'circle'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <Circle className="w-4 h-4" />
-                  <span>Circle / Ellipse</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectTool('shapes');
-                    onSelectShapeSubtool('line');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'shapes' && activeShapeSubtool === 'line'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <Minus className="w-4 h-4" />
-                  <span>Line</span>
-                </button>
-                <button
-                  onClick={() => {
-                    onSelectTool('shapes');
-                    onSelectShapeSubtool('arrow');
-                    setOpenDropdown(null);
-                  }}
-                  className={`flex items-center space-x-2 w-full px-3 py-2 text-xs rounded-lg transition cursor-pointer ${
-                    activeTool === 'shapes' && activeShapeSubtool === 'arrow'
-                      ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                      : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  <ArrowUpRight className="w-4 h-4" />
-                  <span>Arrow</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => onSelectTool('shapes')}
+            className={`flex items-center space-x-1 px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer shrink-0 ${
+              activeTool === 'shapes'
+                ? 'bg-emerald-500 text-white font-semibold shadow-xs'
+                : 'hover:bg-gray-200/70 text-gray-700'
+            }`}
+          >
+            <Square className="w-4 h-4" />
+            <span>Shapes</span>
+            <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+          </button>
 
           {/* UNDO / REDO */}
-          <div className="flex items-center pl-1 border-l border-gray-300 space-x-0.5">
+          <div className="flex items-center pl-1 border-l border-gray-300 space-x-0.5 shrink-0">
             <button
               onClick={onUndo}
               disabled={!canUndo}
@@ -407,10 +225,116 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
       </div>
 
-      {/* Dynamic Element Styling Sub-Bar when an element is selected */}
+      {/* Subtool Options Bar (Always visible & fully clickable when Forms, Annotate, or Shapes is selected) */}
+      {activeTool === 'forms' && (
+        <div className="bg-emerald-50/60 border-t border-emerald-100 px-3 py-1.5 flex items-center justify-center space-x-2 text-xs overflow-x-auto no-scrollbar animate-in fade-in">
+          <span className="text-emerald-800 font-bold text-2xs uppercase tracking-wider shrink-0">Form Type:</span>
+          <button
+            onClick={() => onSelectFormSubtool('text')}
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeFormSubtool === 'text'
+                ? 'bg-emerald-600 text-white font-bold border-emerald-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <span className="font-mono bg-black/10 px-1 py-0.5 rounded text-2xs">abc</span>
+            <span>Text Field</span>
+          </button>
+          <button
+            onClick={() => onSelectFormSubtool('checkbox')}
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeFormSubtool === 'checkbox'
+                ? 'bg-emerald-600 text-white font-bold border-emerald-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>Checkbox</span>
+          </button>
+        </div>
+      )}
+
+      {activeTool === 'annotate' && (
+        <div className="bg-amber-50/60 border-t border-amber-100 px-3 py-1.5 flex items-center justify-center space-x-2 text-xs overflow-x-auto no-scrollbar animate-in fade-in">
+          <span className="text-amber-800 font-bold text-2xs uppercase tracking-wider shrink-0">Annotate Tool:</span>
+          <button
+            onClick={() => onSelectAnnotateSubtool('pen')}
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeAnnotateSubtool === 'pen'
+                ? 'bg-amber-600 text-white font-bold border-amber-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <PenTool className="w-3.5 h-3.5" />
+            <span>Freehand Pen</span>
+          </button>
+          <button
+            onClick={() => onSelectAnnotateSubtool('highlighter')}
+            className={`flex items-center space-x-1.5 px-3 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeAnnotateSubtool === 'highlighter'
+                ? 'bg-amber-600 text-white font-bold border-amber-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <Highlighter className="w-3.5 h-3.5" />
+            <span>Highlighter</span>
+          </button>
+        </div>
+      )}
+
+      {activeTool === 'shapes' && (
+        <div className="bg-blue-50/60 border-t border-blue-100 px-3 py-1.5 flex items-center justify-center space-x-2 text-xs overflow-x-auto no-scrollbar animate-in fade-in">
+          <span className="text-blue-800 font-bold text-2xs uppercase tracking-wider shrink-0">Shape:</span>
+          <button
+            onClick={() => onSelectShapeSubtool('rectangle')}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeShapeSubtool === 'rectangle'
+                ? 'bg-blue-600 text-white font-bold border-blue-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <Square className="w-3.5 h-3.5" />
+            <span>Rectangle</span>
+          </button>
+          <button
+            onClick={() => onSelectShapeSubtool('circle')}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeShapeSubtool === 'circle'
+                ? 'bg-blue-600 text-white font-bold border-blue-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <Circle className="w-3.5 h-3.5" />
+            <span>Circle</span>
+          </button>
+          <button
+            onClick={() => onSelectShapeSubtool('line')}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeShapeSubtool === 'line'
+                ? 'bg-blue-600 text-white font-bold border-blue-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <Minus className="w-3.5 h-3.5" />
+            <span>Line</span>
+          </button>
+          <button
+            onClick={() => onSelectShapeSubtool('arrow')}
+            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border transition cursor-pointer shrink-0 ${
+              activeShapeSubtool === 'arrow'
+                ? 'bg-blue-600 text-white font-bold border-blue-700 shadow-xs'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+            }`}
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            <span>Arrow</span>
+          </button>
+        </div>
+      )}
+
+      {/* Dynamic Element Styling Bar when an element is selected */}
       {selectedElement && (
-        <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 inline-flex items-center bg-white/95 backdrop-blur-md rounded-xl shadow-2xl border border-emerald-300/90 px-3 py-1.5 space-x-3 text-xs z-50 animate-in fade-in slide-in-from-top-1 duration-150 whitespace-nowrap max-w-[95vw] overflow-x-auto no-scrollbar">
-          
+        <div className="bg-white border-t border-emerald-300/80 px-3 py-1.5 flex items-center justify-center space-x-3 text-xs overflow-x-auto no-scrollbar shadow-inner animate-in fade-in">
           {/* Element Type Indicator */}
           <span className="font-semibold text-emerald-700 uppercase tracking-wider text-2xs bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
             {selectedElement.type}
@@ -447,7 +371,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                       isBold: !(selectedElement as TextElement).isBold,
                     })
                   }
-                  className={`p-1 rounded transition ${
+                  className={`p-1 rounded transition cursor-pointer ${
                     (selectedElement as TextElement).isBold
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'
@@ -462,7 +386,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                       isItalic: !(selectedElement as TextElement).isItalic,
                     })
                   }
-                  className={`p-1 rounded transition ${
+                  className={`p-1 rounded transition cursor-pointer ${
                     (selectedElement as TextElement).isItalic
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'
@@ -517,7 +441,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   onClick={() =>
                     onUpdateSelectedElement({ isBold: !(selectedElement as FormElement).isBold })
                   }
-                  className={`p-1 rounded transition ${
+                  className={`p-1 rounded transition cursor-pointer ${
                     (selectedElement as FormElement).isBold
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'
@@ -530,7 +454,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   onClick={() =>
                     onUpdateSelectedElement({ isItalic: !(selectedElement as FormElement).isItalic })
                   }
-                  className={`p-1 rounded transition ${
+                  className={`p-1 rounded transition cursor-pointer ${
                     (selectedElement as FormElement).isItalic
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'

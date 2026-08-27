@@ -297,9 +297,13 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     if (activeTool !== 'annotate') return;
     if (!containerRef.current) return;
 
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (_) {}
+
     const rect = containerRef.current.getBoundingClientRect();
-    const xPct = ((e.clientX - rect.left) / displayedWidth) * 100;
-    const yPct = ((e.clientY - rect.top) / displayedHeight) * 100;
+    const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / displayedWidth) * 100));
+    const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / displayedHeight) * 100));
 
     setIsDrawing(true);
     setCurrentPath([{ x: xPct, y: yPct }]);
@@ -332,13 +336,17 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     // Handle Freehand Drawing
     if (!isDrawing || activeTool !== 'annotate' || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const xPct = ((e.clientX - rect.left) / displayedWidth) * 100;
-    const yPct = ((e.clientY - rect.top) / displayedHeight) * 100;
+    const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / displayedWidth) * 100));
+    const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / displayedHeight) * 100));
 
     setCurrentPath((prev) => (prev ? [...prev, { x: xPct, y: yPct }] : [{ x: xPct, y: yPct }]));
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+
     if (dragState) {
       setDragState(null);
     }
@@ -432,7 +440,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className="relative bg-white shadow-xl rounded-sm border border-gray-300 overflow-hidden"
+        className={`relative bg-white shadow-xl rounded-sm border border-gray-300 overflow-hidden ${
+          activeTool === 'annotate' || dragState ? 'touch-none' : ''
+        }`}
         style={{
           width: `${displayedWidth}px`,
           height: `${displayedHeight}px`,
