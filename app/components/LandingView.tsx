@@ -84,20 +84,20 @@ export const LandingView: React.FC<LandingViewProps> = ({
           className="hidden"
         />
 
-        {/* Big Blue Upload Button */}
-        <div className="flex items-center shadow-lg rounded-xl overflow-hidden group max-w-full">
+        {/* Upload Button */}
+        <div className="flex items-center shadow-md rounded-xl overflow-hidden group max-w-full">
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center space-x-2.5 sm:space-x-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-base sm:text-lg px-5 sm:px-8 py-3.5 sm:py-4 transition duration-150 cursor-pointer"
+            className="flex items-center space-x-2 sm:space-x-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-sm sm:text-base px-4 sm:px-6 py-2.5 sm:py-3 transition duration-150 cursor-pointer"
           >
-            <div className="bg-blue-700/60 p-1 sm:p-1.5 rounded-lg">
-              <Upload className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+            <div className="bg-blue-700/60 p-1 rounded-md">
+              <Upload className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-white" />
             </div>
             <span>Upload PDF file</span>
           </button>
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="bg-blue-700 hover:bg-blue-800 active:bg-blue-900 text-white px-3 sm:px-3.5 py-4 sm:py-5 border-l border-blue-500/40 transition flex items-center justify-center cursor-pointer"
+            className="bg-blue-700 hover:bg-blue-800 active:bg-blue-900 text-white px-2.5 sm:px-3 py-3 sm:py-3.5 border-l border-blue-500/40 transition flex items-center justify-center cursor-pointer"
             aria-label="Upload options"
           >
             <ChevronDown className="w-4 h-4" />
