@@ -1,9 +1,9 @@
-import type { Metadata } from "next";
-import "./globals.css";
+import type { Metadata } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: "Online PDF Editor - Edit PDF Files for Free | Sejda Clone",
-  description: "Free online PDF editor. Edit PDF files directly in your browser. Add text, images, shapes, signatures, whiteout, and annotations with zero installations.",
+  title: 'Bharat Job - Online PDF Editor | Free & Secure',
+  description: 'Free online PDF editor by Bharat Job Result. Edit PDF files directly in your browser. Add text, images, shapes, signatures, whiteout, and annotations with zero installations.',
 };
 
 export default function RootLayout({
@@ -21,7 +21,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-full flex flex-col font-sans bg-gray-50 text-gray-900 antialiased selection:bg-emerald-200">
+      <body className="min-h-full flex flex-col font-sans bg-gray-50 text-gray-900 antialiased selection:bg-blue-200">
         {children}
       </body>
     </html>

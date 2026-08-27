@@ -151,7 +151,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   // Filter elements on this page
   const pageElements = elements.filter((el) => el.pageIndex === pageInfo.pageIndex);
 
-  // Convert existing static PDF text to editable text (Sejda style)
+  // Convert existing static PDF text to editable text (Bharat Job style)
   const handleConvertExistingText = (item: ExtractedTextItem) => {
     // 1. Whiteout element covering original static text
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
@@ -373,7 +373,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
   return (
     <div className="flex flex-col items-center my-6 select-none" id={`pdf-page-${pageInfo.pageIndex}`}>
-      {/* Sejda Style Page Header Controls */}
+      {/* Bharat Job Style Page Header Controls */}
       <div 
         className="flex items-center justify-between mb-2 text-xs text-gray-600 bg-white/90 backdrop-blur-xs px-3 py-1.5 rounded-lg border border-gray-200 shadow-2xs"
         style={{ width: `${displayedWidth}px` }}

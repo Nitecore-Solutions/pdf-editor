@@ -105,7 +105,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         className="hidden"
       />
 
-      {/* Main Tool Bar (Pill style matching Sejda) */}
+      {/* Main Tool Bar (Bharat Job Style) */}
       <div className="inline-flex items-center bg-white rounded-xl shadow-md border border-gray-200 p-1 divide-x divide-gray-100 text-xs sm:text-sm font-medium text-gray-700">
         
         {/* TEXT TOOL */}
