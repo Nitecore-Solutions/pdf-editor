@@ -38,7 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="flex items-center space-x-2.5 cursor-pointer group"
           >
             <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-black text-sm shadow-sm group-hover:bg-blue-700 transition">
-              BJ
+              B
             </div>
             <span className="font-extrabold text-lg sm:text-xl text-gray-900 tracking-tight flex items-center gap-1.5">
               <span>Bharat Job</span>
