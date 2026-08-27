@@ -96,7 +96,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const colors = ['#000000', '#1e293b', '#dc2626', '#16a34a', '#2563eb', '#ca8a04', '#9333ea', '#ffffff'];
 
   return (
-    <div className="sticky top-14 z-30 flex items-center justify-start sm:justify-center w-full px-2 sm:px-4 bg-gray-50/95 backdrop-blur-md border-b border-gray-200 select-none relative h-13 overflow-x-auto no-scrollbar">
+    <div className="shrink-0 w-full bg-white/98 border-b border-gray-200 select-none z-30 py-1.5 px-2 overflow-x-auto no-scrollbar shadow-2xs">
       <input
         type="file"
         ref={imageInputRef}
@@ -105,8 +105,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         className="hidden"
       />
 
+      {/* Backdrop for open dropdowns */}
+      {openDropdown && (
+        <div 
+          className="fixed inset-0 z-40 bg-transparent" 
+          onClick={() => setOpenDropdown(null)} 
+        />
+      )}
+
       {/* Main Tool Bar (Bharat Job Style) */}
-      <div className="inline-flex items-center bg-white rounded-xl shadow-md border border-gray-200 p-1 divide-x divide-gray-100 text-xs sm:text-sm font-medium text-gray-700 shrink-0 mx-auto sm:mx-0">
+      <div className="flex items-center justify-start sm:justify-center min-w-max mx-auto p-1 bg-gray-50/90 rounded-xl border border-gray-200/90 text-xs sm:text-sm font-medium text-gray-700 space-x-1">
         
         {/* TEXT TOOL */}
         <div className="relative">

@@ -259,6 +259,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       onAddElement(newShape);
       onSelectElement(id);
     } else if (activeTool === 'forms') {
+      const isCheckbox = activeFormSubtool === 'checkbox';
       const newForm: FormElement = {
         id,
         pageIndex: pageInfo.pageIndex,
@@ -266,9 +267,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         formType: activeFormSubtool,
         x: xPct,
         y: yPct,
-        width: activeFormSubtool === 'checkbox' ? 3.5 : 25,
-        height: activeFormSubtool === 'checkbox' ? 2.5 : 3.5,
-        value: activeFormSubtool === 'checkbox' ? false : '',
+        width: isCheckbox ? 5 : 28,
+        height: isCheckbox ? 4 : 4.5,
+        value: isCheckbox ? false : '',
       };
       onAddElement(newForm);
       onSelectElement(id);
@@ -824,20 +825,25 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
                 {/* 6. FORMS */}
                 {el.type === 'form' && (
-                  <div className="w-full h-full">
+                  <div className="w-full h-full pointer-events-auto flex items-center justify-center">
                     {el.formType === 'checkbox' ? (
                       <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
+                          onSelectElement(el.id);
                           onUpdateElement(el.id, { value: !el.value });
                         }}
-                        className={`w-full h-full border-2 rounded flex items-center justify-center transition ${
+                        className={`w-full h-full border-2 rounded flex items-center justify-center transition cursor-pointer active:scale-95 touch-manipulation ${
                           el.value
                             ? 'bg-emerald-600 border-emerald-700 text-white'
-                            : 'bg-white border-gray-400'
+                            : 'bg-white border-gray-400 hover:border-gray-600'
                         }`}
+                        aria-label="Form Checkbox"
                       >
-                        {el.value && <Check className="w-3 h-3 stroke-3" />}
+                        {el.value && <Check className="w-3.5 h-3.5 stroke-3" />}
                       </button>
                     ) : (
                       <input
@@ -846,10 +852,22 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                         onChange={(e) =>
                           onUpdateElement(el.id, { value: e.target.value })
                         }
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        onTouchStart={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
                         placeholder={el.placeholder || 'Fill field...'}
-                        className="w-full h-full px-1 bg-blue-50/50 border border-blue-300 rounded focus:outline-none focus:bg-white"
+                        className="w-full h-full px-1.5 py-0.5 bg-blue-50/70 border border-blue-400 rounded focus:outline-none focus:bg-white text-gray-900 focus:ring-1 focus:ring-blue-500 touch-manipulation text-xs"
                         style={{
-                          fontSize: `${el.fontSize || 12}px`,
+                          fontSize: `${Math.max(10, (el.fontSize || 12) * zoom)}px`,
                           color: el.color || '#1e293b',
                           fontWeight: el.isBold ? 700 : 400,
                           fontStyle: el.isItalic ? 'italic' : 'normal',

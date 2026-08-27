@@ -61,22 +61,22 @@ export async function renderPdfPage({
   const totalRotation = ((page.rotate || 0) + (rotation || 0)) % 360;
   const viewport = page.getViewport({ scale: totalScale, rotation: totalRotation });
 
-  // Render on an isolated offscreen canvas to completely eliminate concurrent render collision
-  // We render at physical pixel density for sharpness (DPR scaling)
+  // Ultra-crisp high-DPI rendering: Use supersampling (at least 2.5x - 3x or devicePixelRatio)
+  // This completely eliminates any blurriness or pixelation on mobile screens
+  const dpr = Math.max(window.devicePixelRatio || 1, 2.5);
+  const renderScale = baseScale * Math.max(scale * dpr, 2.0);
+  const renderViewport = page.getViewport({ scale: renderScale, rotation: totalRotation });
+
   const offscreenCanvas = document.createElement('canvas');
-  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap at 2x to prevent fog from over-scaling
+  offscreenCanvas.width = Math.round(renderViewport.width);
+  offscreenCanvas.height = Math.round(renderViewport.height);
 
-  offscreenCanvas.width = Math.round(viewport.width * dpr);
-  offscreenCanvas.height = Math.round(viewport.height * dpr);
-
-  const offscreenCtx = offscreenCanvas.getContext('2d');
+  const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
   if (!offscreenCtx) throw new Error('Canvas 2D context not available');
-
-  offscreenCtx.scale(dpr, dpr);
 
   const renderContext = {
     canvasContext: offscreenCtx,
-    viewport: viewport,
+    viewport: renderViewport,
   };
 
   await page.render(renderContext).promise;
@@ -84,13 +84,12 @@ export async function renderPdfPage({
   // Target DOM canvas: match physical pixel dimensions exactly
   canvas.width = offscreenCanvas.width;
   canvas.height = offscreenCanvas.height;
-  // Set CSS size to logical CSS pixels so it displays at correct visual size
+  // Set CSS size to logical CSS pixels so it displays at correct visual size smoothly
   canvas.style.width = `${viewport.width}px`;
   canvas.style.height = `${viewport.height}px`;
 
-  const targetCtx = canvas.getContext('2d');
+  const targetCtx = canvas.getContext('2d', { alpha: false });
   if (targetCtx) {
-    targetCtx.clearRect(0, 0, canvas.width, canvas.height);
     targetCtx.drawImage(offscreenCanvas, 0, 0);
   }
 

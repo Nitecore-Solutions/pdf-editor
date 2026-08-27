@@ -58,9 +58,23 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       setZoom(Math.round(fit * 100) / 100);
     }
   }, []);
+
   // Track the page currently visible in the scroll area
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const mainScrollRef = React.useRef<HTMLDivElement>(null);
+  const prevZoomRef = React.useRef(zoom);
+
+  // Preserve center focal point when zooming in or out
+  useEffect(() => {
+    const container = mainScrollRef.current;
+    if (container && prevZoomRef.current !== zoom) {
+      const ratio = zoom / prevZoomRef.current;
+      const currentCenterX = container.scrollLeft + container.clientWidth / 2;
+      const newCenterX = currentCenterX * ratio;
+      container.scrollLeft = Math.max(0, newCenterX - container.clientWidth / 2);
+    }
+    prevZoomRef.current = zoom;
+  }, [zoom]);
 
   // Undo / Redo history
   const [history, setHistory] = useState<EditorElement[][]>([]);
@@ -367,7 +381,9 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       />
 
       {/* Multi-Page Canvas Scroll Area */}
-      <main ref={mainScrollRef} className="flex-1 overflow-y-auto overflow-x-auto px-2 sm:px-4 py-4 sm:py-8 flex flex-col items-center pb-28 sm:pb-36 w-full"
+      <main 
+        ref={mainScrollRef} 
+        className="flex-1 overflow-y-auto overflow-x-auto py-4 sm:py-8 flex flex-col pb-28 sm:pb-36 w-full"
         onScroll={() => {
           // Detect which page is most visible in the scroll container
           const container = mainScrollRef.current;
@@ -390,27 +406,29 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
           setCurrentPageIndex(closestPage);
         }}
       >
-        {pages.map((page) => (
-          <PageEditor
-            key={`page-${page.pageIndex}-${page.rotation}`}
-            pageInfo={page}
-            pdfBytes={pdfBytes}
-            zoom={zoom}
-            activeTool={activeTool}
-            activeAnnotateSubtool={activeAnnotateSubtool}
-            activeShapeSubtool={activeShapeSubtool}
-            activeFormSubtool={activeFormSubtool}
-            elements={elements}
-            selectedElementId={selectedElementId}
-            onSelectElement={setSelectedElementId}
-            onAddElement={handleAddElement}
-            onUpdateElement={handleUpdateElement}
-            onDeleteElement={handleDeleteElement}
-            onDeletePage={handleDeletePage}
-            onRotatePage={handleRotatePage}
-            onInsertPageHere={handleInsertPage}
-          />
-        ))}
+        <div className="min-w-max mx-auto flex flex-col items-center px-4 sm:px-8">
+          {pages.map((page) => (
+            <PageEditor
+              key={`page-${page.pageIndex}-${page.rotation}`}
+              pageInfo={page}
+              pdfBytes={pdfBytes}
+              zoom={zoom}
+              activeTool={activeTool}
+              activeAnnotateSubtool={activeAnnotateSubtool}
+              activeShapeSubtool={activeShapeSubtool}
+              activeFormSubtool={activeFormSubtool}
+              elements={elements}
+              selectedElementId={selectedElementId}
+              onSelectElement={setSelectedElementId}
+              onAddElement={handleAddElement}
+              onUpdateElement={handleUpdateElement}
+              onDeleteElement={handleDeleteElement}
+              onDeletePage={handleDeletePage}
+              onRotatePage={handleRotatePage}
+              onInsertPageHere={handleInsertPage}
+            />
+          ))}
+        </div>
       </main>
 
       {/* Sticky Bottom Bar (Apply changes >) */}
