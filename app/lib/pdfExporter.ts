@@ -22,6 +22,66 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
   return bytes;
 }
 
+// High-resolution fallback for rendering Unicode (Hindi / Devanagari / Special symbols) to PNG
+function renderTextToCanvasPng(
+  text: string,
+  fontSizePt: number,
+  color: string,
+  isBold: boolean,
+  isItalic: boolean,
+  fontFamily: string,
+  boxWidthPt: number,
+  align: string = 'left'
+): Uint8Array | null {
+  try {
+    const scale = 3; // 3x crisp supersampling
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const fontStyle = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${Math.round(fontSizePt * scale)}px ${
+      fontFamily || 'Arial, sans-serif'
+    }`;
+    ctx.font = fontStyle;
+
+    const lines = text.split('\n');
+    let maxLineWidth = 0;
+    for (const l of lines) {
+      const m = ctx.measureText(l);
+      if (m.width > maxLineWidth) maxLineWidth = m.width;
+    }
+
+    const w = Math.max(Math.round(boxWidthPt * scale), Math.round(maxLineWidth) + 20);
+    const lineHeightPx = fontSizePt * 1.25 * scale;
+    const h = Math.round(Math.max(fontSizePt * scale, lines.length * lineHeightPx));
+
+    canvas.width = w;
+    canvas.height = h;
+
+    ctx.font = fontStyle;
+    ctx.fillStyle = color || '#000000';
+    ctx.textBaseline = 'top';
+
+    lines.forEach((line, idx) => {
+      let x = 0;
+      if (align === 'center') {
+        const textW = ctx.measureText(line).width;
+        x = (w - textW) / 2;
+      } else if (align === 'right') {
+        const textW = ctx.measureText(line).width;
+        x = w - textW;
+      }
+      ctx.fillText(line, x, idx * lineHeightPx);
+    });
+
+    const dataUrl = canvas.toDataURL('image/png');
+    return dataUrlToBytes(dataUrl);
+  } catch (e) {
+    console.warn('Unicode text rasterization fallback failed:', e);
+    return null;
+  }
+}
+
 export interface ExportPdfOptions {
   originalPdfBytes: Uint8Array | null;
   pages: PageInfo[];
@@ -108,28 +168,65 @@ export async function exportModifiedPdf({
         const lines = (el.text || '').split('\n');
         const lineHeight = fontSizePt * 1.2;
 
-        // Draw each line
-        lines.forEach((line, lineIndex) => {
-          if (!line.trim() && lines.length === 1) return;
-          const lineY = (pageHeight - (el.y / 100) * pageHeight) - (lineIndex + 0.85) * lineHeight;
-          
-          let lineX = elX;
-          if (el.align === 'center') {
-            const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
-            lineX = elX + (elWidth - textWidth) / 2;
-          } else if (el.align === 'right') {
-            const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
-            lineX = elX + elWidth - textWidth;
+        // Verify if all lines can be encoded directly with WinAnsi
+        let canEncodeDirectly = true;
+        try {
+          for (const line of lines) {
+            fontToUse.encodeText(line);
           }
+        } catch (_) {
+          canEncodeDirectly = false;
+        }
 
-          pdfPage.drawText(line, {
-            x: Math.max(0, lineX),
-            y: Math.max(0, lineY),
-            size: fontSizePt,
-            font: fontToUse,
-            color: textColor,
+        if (canEncodeDirectly) {
+          lines.forEach((line, lineIndex) => {
+            if (!line.trim() && lines.length === 1) return;
+            const lineY = pageHeight - (el.y / 100) * pageHeight - (lineIndex + 0.85) * lineHeight;
+
+            let lineX = elX;
+            if (el.align === 'center') {
+              const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
+              lineX = elX + (elWidth - textWidth) / 2;
+            } else if (el.align === 'right') {
+              const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
+              lineX = elX + elWidth - textWidth;
+            }
+
+            pdfPage.drawText(line, {
+              x: Math.max(0, lineX),
+              y: Math.max(0, lineY),
+              size: fontSizePt,
+              font: fontToUse,
+              color: textColor,
+            });
           });
-        });
+        } else {
+          // Unicode / Hindi / Complex script fallback via high-res PNG embedding
+          try {
+            const pngBytes = renderTextToCanvasPng(
+              el.text,
+              fontSizePt,
+              el.color || '#000000',
+              !!el.isBold,
+              !!el.isItalic,
+              el.fontFamily || 'Arial, sans-serif',
+              elWidth,
+              el.align || 'left'
+            );
+            if (pngBytes) {
+              const embedded = await outputDoc.embedPng(pngBytes);
+              const { width: imgW, height: imgH } = embedded.scale(1 / 3);
+              pdfPage.drawImage(embedded, {
+                x: elX,
+                y: pageHeight - (el.y / 100) * pageHeight - imgH,
+                width: imgW,
+                height: imgH,
+              });
+            }
+          } catch (unicodeErr) {
+            console.warn('Unicode text embed error:', unicodeErr);
+          }
+        }
       } else if (el.type === 'image' || el.type === 'signature') {
         try {
           if (el.dataUrl && el.dataUrl.startsWith('data:image/')) {
@@ -152,9 +249,10 @@ export async function exportModifiedPdf({
       } else if (el.type === 'shape') {
         const strokeColor = hexToRgb(el.strokeColor || '#000000');
         const strokeWidth = el.strokeWidth || 2;
-        const fillColor = el.isFilled && el.fillColor && el.fillColor !== 'transparent'
-          ? hexToRgb(el.fillColor)
-          : undefined;
+        const fillColor =
+          el.isFilled && el.fillColor && el.fillColor !== 'transparent'
+            ? hexToRgb(el.fillColor)
+            : undefined;
 
         if (el.shapeType === 'rectangle') {
           pdfPage.drawRectangle({
@@ -216,7 +314,7 @@ export async function exportModifiedPdf({
           if (!path.points || path.points.length < 2) continue;
           const pathColor = hexToRgb(path.color || '#ff0000');
           const pathWidth = path.width || 3;
-          const opacity = path.isHighlighter ? 0.35 : (path.opacity || 1);
+          const opacity = path.isHighlighter ? 0.35 : path.opacity || 1;
 
           for (let i = 0; i < path.points.length - 1; i++) {
             const p1 = path.points[i];
@@ -247,13 +345,19 @@ export async function exportModifiedPdf({
             borderWidth: 1.5,
             color: rgb(1, 1, 1),
           });
+          // Draw crisp vector checkmark lines (never throws WinAnsi error)
           if (el.value === true) {
-            pdfPage.drawText('✓', {
-              x: elX + elWidth * 0.2,
-              y: elY + elHeight * 0.15,
-              size: elHeight * 0.75,
-              font: helveticaBold,
-              color: rgb(0.1, 0.5, 0.2),
+            pdfPage.drawLine({
+              start: { x: elX + elWidth * 0.2, y: elY + elHeight * 0.45 },
+              end: { x: elX + elWidth * 0.42, y: elY + elHeight * 0.2 },
+              thickness: 2,
+              color: rgb(0.1, 0.6, 0.2),
+            });
+            pdfPage.drawLine({
+              start: { x: elX + elWidth * 0.42, y: elY + elHeight * 0.2 },
+              end: { x: elX + elWidth * 0.8, y: elY + elHeight * 0.78 },
+              thickness: 2,
+              color: rgb(0.1, 0.6, 0.2),
             });
           }
         } else {
@@ -267,13 +371,36 @@ export async function exportModifiedPdf({
             color: rgb(0.97, 0.98, 1),
           });
           if (typeof el.value === 'string' && el.value.trim()) {
-            pdfPage.drawText(el.value, {
-              x: elX + 4,
-              y: elY + elHeight / 2 - 5,
-              size: 12,
-              font: helveticaFont,
-              color: rgb(0, 0, 0),
-            });
+            try {
+              helveticaFont.encodeText(el.value);
+              pdfPage.drawText(el.value, {
+                x: elX + 4,
+                y: elY + elHeight / 2 - 5,
+                size: 11,
+                font: helveticaFont,
+                color: rgb(0, 0, 0),
+              });
+            } catch (_) {
+              const pngBytes = renderTextToCanvasPng(
+                el.value,
+                11,
+                '#000000',
+                false,
+                false,
+                'Arial, sans-serif',
+                elWidth - 8
+              );
+              if (pngBytes) {
+                const embedded = await outputDoc.embedPng(pngBytes);
+                const { width: imgW, height: imgH } = embedded.scale(1 / 3);
+                pdfPage.drawImage(embedded, {
+                  x: elX + 4,
+                  y: elY + (elHeight - imgH) / 2,
+                  width: imgW,
+                  height: imgH,
+                });
+              }
+            }
           }
         }
       }

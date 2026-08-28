@@ -475,7 +475,12 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         {activeTool === 'text' && (
           <div className="absolute inset-0 z-25 pointer-events-none">
             {extractedTexts
-              .filter((item) => !editedOriginalIds.has(item.id))
+              .filter((item) => {
+                if (editedOriginalIds.has(item.id)) return false;
+                // Exclude Hindi / Devanagari / complex scripts so native Hindi text is never disrupted
+                const isComplexScript = /[\u0900-\u097F\u0A00-\u0D7F]/.test(item.str);
+                return !isComplexScript;
+              })
               .map((item) => (
                 <div
                   key={item.id}
