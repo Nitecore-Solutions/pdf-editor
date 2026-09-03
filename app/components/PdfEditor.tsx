@@ -281,7 +281,7 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
             x: 20,
             y: 20,
             width: 25,
-            height: 25 / aspectRatio,
+            height: (25 * (img.height / img.width) * ((pages[currentPageIndex]?.width || 794) / (pages[currentPageIndex]?.height || 1123))),
           };
           handleAddElement(newImgElement);
           setSelectedElementId(id);

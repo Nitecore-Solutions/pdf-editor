@@ -321,11 +321,14 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         onUpdateElement(dragState.elementId, { x: newX, y: newY });
       } else if (dragState.action === 'resize-br') {
         const targetElement = pageElements.find((el) => el.id === dragState.elementId);
-        if (targetElement?.type === 'image' && (targetElement as any).aspectRatio) {
-          const imgEl = targetElement as any;
-          const pageAspect = pageSize.width / pageSize.height;
+        if (targetElement?.type === 'image' || targetElement?.type === 'signature') {
+          const initialPixelW = (dragState.initialW / 100) * pageSize.width;
+          const initialPixelH = (dragState.initialH / 100) * pageSize.height;
+          const aspect = initialPixelH > 0 ? initialPixelW / initialPixelH : 1;
           const newW = Math.max(3, dragState.initialW + deltaX);
-          const newH = newW / (imgEl.aspectRatio * pageAspect);
+          const newPixelW = (newW / 100) * pageSize.width;
+          const newPixelH = newPixelW / aspect;
+          const newH = (newPixelH / pageSize.height) * 100;
           onUpdateElement(dragState.elementId, { width: newW, height: newH });
         } else {
           const newW = Math.max(2, dragState.initialW + deltaX);
@@ -752,7 +755,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     <img
                       src={el.dataUrl}
                       alt="Embedded"
-                      className="w-full h-full object-fill pointer-events-none"
+                      className="w-full h-full object-contain pointer-events-none"
                     />
                   </div>
                 )}
