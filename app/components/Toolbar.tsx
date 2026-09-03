@@ -353,7 +353,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   }
                   className="bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none"
                 >
-                  {Array.from(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 40, 48, 64, (selectedElement as TextElement).fontSize || 14]))
+                  {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32, 36, 40, 44, 48, 56, 64, 72, 80, 96, (selectedElement as any).fontSize || 14]))
                     .sort((a, b) => a - b)
                     .map((size) => (
                       <option key={size} value={size}>
@@ -429,7 +429,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   }
                   className="bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5 text-xs focus:outline-none"
                 >
-                  {[8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24].map((size) => (
+                  {Array.from(new Set([6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 26, 28, 30, 32, 36, 40, 44, 48, 56, 64, 72, 80, 96, (selectedElement as FormElement).fontSize || 12])).sort((a, b) => a - b).map((size) => (
                     <option key={size} value={size}>{size}px</option>
                   ))}
                 </select>

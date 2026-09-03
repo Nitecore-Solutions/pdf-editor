@@ -198,11 +198,16 @@ export async function extractPageTextItems(
       !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet &&
       (isTimes || isGaramond || isCambria || isGeorgia || isPalatinoOrBook ||
        fontNameLower.includes('roman') ||
+       fontNameLower.includes('serif') ||
+       fontNameLower.includes('minion') ||
+       fontNameLower.includes('baskerville') ||
        (styleFontFamily.includes('serif') && !styleFontFamily.includes('sans')));
 
     let fontFamily: string;
     if (isMonospace) {
       fontFamily = '"Courier New", Courier, monospace';
+    } else if (isTimes || isSerif || styleFontFamily.includes("serif") || fontNameLower.includes("roman") || fontNameLower.includes("serif")) {
+      fontFamily = '"Times New Roman", Times, Georgia, serif';
     } else if (isArial) {
       fontFamily = 'Arial, "Liberation Sans", Helvetica, sans-serif';
     } else if (isHelvetica) {
@@ -239,7 +244,7 @@ export async function extractPageTextItems(
       yPct,
       widthPct: Math.max(0.8, widthPct),
       heightPct: Math.max(0.8, heightPct),
-      fontSize: Math.round(fontPx),
+      fontSize: Math.max(8, Math.round(fontPt * baseScale)),
       fontFamily,
       isBold,
       isItalic,
@@ -267,7 +272,8 @@ export async function extractPageTextItems(
       const sameStyle = prev.isBold === item.isBold && prev.isItalic === item.isItalic && prev.fontFamily === item.fontFamily;
       
       if (sameLine && isNextTo && Math.abs(prev.fontSize - item.fontSize) <= 2 && sameStyle) {
-        prev.str += (xDistance > 0.1 ? ' ' : '') + item.str;
+        const needsSpace = xDistance > 0.08 && !prev.str.endsWith(' ') && !item.str.startsWith(' ');
+        prev.str += (needsSpace ? ' ' : '') + item.str;
         prev.widthPct = Math.min(100 - prev.xPct, (item.xPct + item.widthPct) - prev.xPct);
         prev.heightPct = Math.max(prev.heightPct, item.heightPct);
         continue;

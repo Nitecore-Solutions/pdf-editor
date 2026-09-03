@@ -1,3 +1,49 @@
+
+function renderDrawingsToCanvasPng(
+  drawingElements: any[],
+  pageWidthPt: number,
+  pageHeightPt: number
+): Uint8Array | null {
+  try {
+    if (typeof document === 'undefined') return null;
+    const scale = 2.5;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(pageWidthPt * scale);
+    canvas.height = Math.round(pageHeightPt * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.scale(scale, scale);
+
+    for (const el of drawingElements) {
+      for (const path of el.paths || []) {
+        if (!path.points || path.points.length < 2) continue;
+        ctx.save();
+        ctx.beginPath();
+        ctx.strokeStyle = path.color || '#ff0000';
+        ctx.lineWidth = path.isHighlighter ? (path.width || 8) * 1.6 : (path.width || 2.5);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = path.isHighlighter ? 0.38 : (path.opacity || 1);
+
+        const first = path.points[0];
+        ctx.moveTo((first.x / 100) * pageWidthPt, (first.y / 100) * pageHeightPt);
+        for (let i = 1; i < path.points.length; i++) {
+          const pt = path.points[i];
+          ctx.lineTo((pt.x / 100) * pageWidthPt, (pt.y / 100) * pageHeightPt);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    return dataUrlToBytes(canvas.toDataURL('image/png'));
+  } catch (e) {
+    console.warn('Drawing rasterization failed:', e);
+    return null;
+  }
+}
+
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
 import { EditorElement, PageInfo } from '../types/editor';
 
@@ -310,29 +356,15 @@ export async function exportModifiedPdf({
           }
         }
       } else if (el.type === 'drawing') {
-        for (const path of el.paths || []) {
-          if (!path.points || path.points.length < 2) continue;
-          const pathColor = hexToRgb(path.color || '#ff0000');
-          const pathWidth = path.width || 3;
-          const opacity = path.isHighlighter ? 0.35 : path.opacity || 1;
-
-          for (let i = 0; i < path.points.length - 1; i++) {
-            const p1 = path.points[i];
-            const p2 = path.points[i + 1];
-
-            const x1 = (p1.x / 100) * pageWidth;
-            const y1 = pageHeight - (p1.y / 100) * pageHeight;
-            const x2 = (p2.x / 100) * pageWidth;
-            const y2 = pageHeight - (p2.y / 100) * pageHeight;
-
-            pdfPage.drawLine({
-              start: { x: x1, y: y1 },
-              end: { x: x2, y: y2 },
-              thickness: path.isHighlighter ? pathWidth * 3 : pathWidth,
-              color: pathColor,
-              opacity: opacity,
-            });
-          }
+        const drawingPng = renderDrawingsToCanvasPng([el], pageWidth, pageHeight);
+        if (drawingPng) {
+          const embeddedDrawing = await outputDoc.embedPng(drawingPng);
+          pdfPage.drawImage(embeddedDrawing, {
+            x: 0,
+            y: 0,
+            width: pageWidth,
+            height: pageHeight,
+          });
         }
       } else if (el.type === 'form') {
         if (el.formType === 'checkbox') {
