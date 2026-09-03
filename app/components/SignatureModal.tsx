@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef } from 'react';
 import { X, PenTool, Type, Upload, Eraser, Check } from 'lucide-react';
 interface SignatureModalProps { isOpen: boolean; onClose: () => void; onSaveSignature: (dataUrl: string, sigType: 'draw' | 'type' | 'upload', color: string) => void; }
 export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose, onSaveSignature }) => {
@@ -9,9 +9,9 @@ export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose,
   const [selectedFont, setSelectedFont] = useState('font-cursive-1');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
+  const isDrawingRef = useRef(false);
   const [hasDrawn, setHasDrawn] = useState(false);
-  const [drawnPaths, setDrawnPaths] = useState<{ x: number; y: number }[][]>([]);
+  const strokesRef = useRef<{ x: number; y: number }[][]>([]);
   const currentStrokeRef = useRef<{ x: number; y: number }[]>([]);
   const colors = [
     { name: 'Black', value: '#1e293b' },
@@ -20,80 +20,91 @@ export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose,
     { name: 'Emerald', value: '#047857' },
     { name: 'Red', value: '#b91c1c' },
   ];
-  const redrawCanvas = useCallback((colorToUse: string, pathsToDraw: { x: number; y: number }[][]) => {
+  const applyColorToCanvas = (newColor: string) => {
+    setSelectedColor(newColor);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = colorToUse;
-    ctx.lineWidth = 2.5;
-    for (const path of pathsToDraw) {
-      if (path.length < 2) continue;
-      ctx.beginPath();
-      ctx.moveTo(path[0].x, path[0].y);
-      for (let i = 1; i < path.length; i++) {
-        ctx.lineTo(path[i].x, path[i].y);
-      }
-      ctx.stroke();
-    }
-  }, []);
 
-  useEffect(() => {
-    if (isOpen && activeTab === 'draw') {
-      redrawCanvas(selectedColor, drawnPaths);
+    if (strokesRef.current.length > 0) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = newColor;
+      ctx.lineWidth = 2.5;
+
+      for (const stroke of strokesRef.current) {
+        if (stroke.length === 0) continue;
+        ctx.beginPath();
+        ctx.moveTo(stroke[0].x, stroke[0].y);
+        for (let i = 1; i < stroke.length; i++) {
+          ctx.lineTo(stroke[i].x, stroke[i].y);
+        }
+        ctx.stroke();
+      }
+    } else {
+      ctx.strokeStyle = newColor;
     }
-  }, [isOpen, activeTab, selectedColor, drawnPaths, redrawCanvas]);
+  };
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
     const rect = canvas.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
+
     const x = (clientX - rect.left) * scaleX;
     const y = (clientY - rect.top) * scaleY;
+
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = selectedColor;
     ctx.lineWidth = 2.5;
+
     ctx.beginPath();
     ctx.moveTo(x, y);
-    setIsDrawing(true);
+    isDrawingRef.current = true;
     setHasDrawn(true);
     currentStrokeRef.current = [{ x, y }];
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
+    if (!isDrawingRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
     const rect = canvas.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
+
     const x = (clientX - rect.left) * scaleX;
     const y = (clientY - rect.top) * scaleY;
-    ctx.strokeStyle = selectedColor;
+
     ctx.lineTo(x, y);
     ctx.stroke();
     currentStrokeRef.current.push({ x, y });
   };
 
   const stopDrawing = () => {
-    if (isDrawing && currentStrokeRef.current.length > 1) {
-      setDrawnPaths((prev) => [...prev, currentStrokeRef.current]);
+    if (isDrawingRef.current) {
+      isDrawingRef.current = false;
+      if (currentStrokeRef.current.length > 0) {
+        strokesRef.current.push([...currentStrokeRef.current]);
+      }
+      currentStrokeRef.current = [];
     }
-    setIsDrawing(false);
-    currentStrokeRef.current = [];
   };
 
   const clearCanvas = () => {
@@ -102,7 +113,8 @@ export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose,
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      setDrawnPaths([]);
+      strokesRef.current = [];
+      currentStrokeRef.current = [];
       setHasDrawn(false);
     }
   };
@@ -124,16 +136,20 @@ export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose,
     canvas.width = 600;
     canvas.height = 200;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return'';
+    if (!ctx) return '';
+
     ctx.fillStyle = color;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
+
     let fontFace = 'Dancing Script, cursive';
-    if (fontStyle === 'font-cursive-2') fontFace = 'Great Vibes, cursive, Pacifico';
-    else if (fontStyle === 'font-cursive-3') fontFace = 'Caveat, cursive, cursive';
-    else if (fontStyle === 'font-cursive-4') fontFace = 'Sacramento, cursive, Brush Script MT';
+    if (fontStyle === 'font-cursive-2') fontFace = 'Great Vibes, cursive';
+    else if (fontStyle === 'font-cursive-3') fontFace = 'Caveat, cursive';
+    else if (fontStyle === 'font-cursive-4') fontFace = 'Sacramento, cursive';
+
     ctx.font = 'italic 54px ' + fontFace + ', serif';
     ctx.fillText(name || 'Signature', canvas.width / 2, canvas.height / 2);
+
     return canvas.toDataURL('image/png');
   };
 
@@ -146,7 +162,6 @@ export const SignatureModal: React.FC<SignatureModalProps> = ({ isOpen, onClose,
         alert('Please draw your signature first.');
         return;
       }
-      redrawCanvas(selectedColor, drawnPaths);
       const dataUrl = canvas.toDataURL('image/png');
       onSaveSignature(dataUrl, 'draw', selectedColor);
       onClose();
@@ -185,11 +200,11 @@ rounded-2xl shadow-2xl overflow-hidden border border-gray-200 flex flex-col max-
             <PenTool className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span>Draw</span>
           </button>
-          <button onClick={() => setActiveTab('type')} className={'flex items-center space-x-1.5 sm:space-x-2 px-3 sm:px-4 py-2 sm:py-2.5 font-medium text-xs sm:text-sm border-b-2 transition cursor-pointer shrink-0 ' + (activeTab === 'type' ? 'border-emerald-500 text-emerald-600 bg-white rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+          <button onClick={() => setActiveTab('type')} className={'flex items-center space-x-1.5 sm:space-x-2 px-3 sm:px-4 py-2 sm;py-2.5 font-medium text-xs sm:text-sm border-b-2 transition cursor-pointer shrink-0 ' + (activeTab === 'type' ? 'border-emerald-500 text-emerald-600 bg-white rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-700')}>
             <Type className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span>Type</span>
           </button>
-          <button onClick={() => setActiveTab('upload')} className={'flex items-center space-x-1.5 sm:space-x-2 px-3 sm:px-4 py-2 sm:py-2.5 font-medium text-xs sm:text-sm border-b-2 transition cursor-pointer shrink-0 ' + (activeTab === 'upload' ? 'border-emerald-500 text-emerald-600 bg-white rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+          <button onClick={() => setActiveTab('upload')} className={'flex items-center space-x-1.5 sm;space-x-2 px-3 sm;px-4 py-2 sm:py-2.5 font-medium text-xs sm:text-sm border-b-2 transition cursor-pointer shrink-0 ' + (activeTab === 'upload' ? 'border-emerald-500 text-emerald-600 bg-white rounded-t-lg' : 'border-transparent text-gray-500 hover:text-gray-700')}>
             <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span>Upload Image</span>
           </button>
@@ -199,7 +214,7 @@ rounded-2xl shadow-2xl overflow-hidden border border-gray-200 flex flex-col max-
             <span className="text-2xs sm:text-xs font-semibold text-gray-500 uppercase tracking-wider">Signature Color</span>
             <div className="flex items-center space-x-1.5 sm:space-x-2">
               {colors.map((c) => (
-                <button key={c.value} onClick={() => setSelectedColor(c.value)} style={{ backgroundColor: c.value }} className={'w-5 h-5 sm:w-6 sm:h-6 rounded-full transition-transform cursor-pointer flex items-center justify-center ' + (selectedColor === c.value ? 'ring-2 ring-emerald-500 ring-offset-2 scale-110' : 'hover:scale-105')} title={c.name} aria-label={c.name}>
+                <button key={c.value} onClick={() => applyColorToCanvas(c.value)} style={{ backgroundColor: c.value }} className={'w-5 h-5 sm:w-6 sm:h-6 rounded-full transition-transform cursor-pointer flex items-center justify-center ' + (selectedColor === c.value ? 'ring-2 ring-emerald-500 ring-offset-2 scale-110' : 'hover:scale-105')} title={c.name} aria-label={c.name}>
                   {selectedColor === c.value && <Check className="w-3 h-3 text-white" />}
                 </button>
               ))}
@@ -209,7 +224,8 @@ rounded-2xl shadow-2xl overflow-hidden border border-gray-200 flex flex-col max-
             <div>
               <div className="relative border-2 border-dashed border-gray-300 rounded-xl bg-gray-50/50 overflow-hidden">
                 <canvas ref={canvasRef} width={460} height={180} onMouseDown={startDrawing} onMouseMove={draw} onMouseUp={stopDrawing} onMouseLeave={stopDrawing} onTouchStart={startDrawing} onTouchMove={draw} onTouchEnd={stopDrawing} className="cursor-crosshair w-full h-[150px] sm:h-[180px] touch-none" />
-                {!hasDrawn && <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-gray-400 text-xs sm:text-sm text-center px-4">Draw your signature here with finger or mouse</div>}
+			
+{!hasDrawn && <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-gray-400 text-xs sm:text-sm text-center px-4">Draw your signature here with finger or mouse</div>}
               </div>
               <div className="flex justify-end mt-2">
                 <button onClick={clearCanvas} className="flex items-center space-x-1 text-xs text-gray-500 hover:text-red-600 transition cursor-pointer p-1">
