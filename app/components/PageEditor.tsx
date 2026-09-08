@@ -213,14 +213,17 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
     // 1. Whiteout element covering original static text completely
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
+    const yOffset = isDevanagari ? 0.15 : 0.05;
+    const hExtra = isDevanagari ? 0.1 : 0.05;
+
     const whiteout: WhiteoutElement = {
       id: whiteoutId,
       pageIndex: pageInfo.pageIndex,
       type: 'whiteout',
       x: Math.max(0, item.xPct - 0.15),
-      y: Math.max(0, item.yPct - 0.08),
+      y: Math.max(0, item.yPct - yOffset),
       width: Math.min(100 - item.xPct + 0.15, item.widthPct + (isDevanagari ? 2.0 : 0.8)),
-      height: Math.min(100 - item.yPct + 0.08, item.heightPct + 0.16),
+      height: Math.min(100 - item.yPct + yOffset, item.heightPct + yOffset + hExtra),
       color: '#ffffff',
     };
 
@@ -232,9 +235,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       type: 'text',
       text: item.str,
       x: item.xPct,
-      y: item.yPct,
+      y: Math.max(0, item.yPct - yOffset),
       width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
-      height: item.heightPct,
+      height: item.heightPct + yOffset + hExtra,
       fontSize: item.fontSize || 14,
       fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
       color: '#000000',
@@ -631,9 +634,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     : 'pointer-events-auto'
                 } ${
                   isSelected
-                    ? 'ring-2 ring-emerald-500 ring-offset-1 shadow-md z-30'
+                    ? 'outline outline-2 outline-emerald-500 shadow-md z-30'
                     : canInteract
-                    ? 'hover:ring-1 hover:ring-emerald-300'
+                    ? 'hover:outline hover:outline-1 hover:outline-emerald-300'
                     : ''
                 }`}
                 style={{
@@ -643,6 +646,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                   maxWidth: el.type === 'text' ? `${Math.max(10, 100 - el.x)}%` : undefined,
                   minWidth: el.type === 'text' ? `${el.width}%` : undefined,
                   height: `${el.height}%`,
+                  overflow: el.type === 'text' ? 'visible' : undefined,
                 }}
               >
                 {/* 1. WHITEOUT */}
@@ -721,7 +725,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                         </span>
                         <textarea
                           ref={(node) => {
-                            if (node && isSelected) {
+                            if (node && isSelected && document.activeElement !== node) {
                               node.focus({ preventScroll: true });
                               const len = node.value.length;
                               node.setSelectionRange(len, len);
@@ -762,7 +766,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     ) : (
                       <input
                         ref={(node) => {
-                          if (node && isSelected) {
+                          if (node && isSelected && document.activeElement !== node) {
                             node.focus({ preventScroll: true });
                             const len = node.value.length;
                             node.setSelectionRange(len, len);
@@ -798,7 +802,6 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                               ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
                               : 'Arial, Helvetica, sans-serif'),
                           lineHeight: 1.28,
-                          height: `${(el.fontSize || 14) * zoom * 1.28}px`,
                           padding: '0 1px',
                           margin: 0,
                           letterSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.012em' : 'normal',
