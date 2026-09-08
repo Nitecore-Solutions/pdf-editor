@@ -53,7 +53,8 @@ function renderTextToCanvasPng(
 
     const w = Math.max(Math.round(boxWidthPt * scale), Math.round(maxLineWidth) + 20);
     const lineHeightPx = fontSizePt * 1.25 * scale;
-    const h = Math.round(Math.max(fontSizePt * scale, lines.length * lineHeightPx));
+    const topPadding = fontSizePt * 0.35 * scale; // headroom for Devanagari top matras
+    const h = Math.round(Math.max(fontSizePt * scale, lines.length * lineHeightPx) + topPadding);
 
     canvas.width = w;
     canvas.height = h;
@@ -71,7 +72,7 @@ function renderTextToCanvasPng(
         const textW = ctx.measureText(line).width;
         x = w - textW;
       }
-      ctx.fillText(line, x, idx * lineHeightPx);
+      ctx.fillText(line, x, topPadding + idx * lineHeightPx);
     });
 
     const dataUrl = canvas.toDataURL('image/png');
@@ -280,7 +281,7 @@ export async function exportModifiedPdf({
               const { width: imgW, height: imgH } = embedded.scale(1 / 3);
               pdfPage.drawImage(embedded, {
                 x: elX,
-                y: pageHeight - (el.y / 100) * pageHeight - imgH,
+                y: pageHeight - (el.y / 100) * pageHeight - imgH + (imgH * 0.35 / 1.35),
                 width: imgW,
                 height: imgH,
               });
