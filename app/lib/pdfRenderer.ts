@@ -31,6 +31,7 @@ async function getPdfDocument(pdfBytes: Uint8Array) {
     data: pdfBytes.slice(0),
     cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
     cMapPacked: true,
+    standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
   });
 
   cachedDocPromise = loadingTask.promise;
@@ -111,6 +112,7 @@ export interface ExtractedTextItem {
   fontFamily: string;
   isBold?: boolean;
   isItalic?: boolean;
+  baselinePct?: number;
 }
 
 export async function extractPageTextItems(
@@ -144,11 +146,15 @@ export async function extractPageTextItems(
     // Convert PDF baseline coordinate to viewport coordinate
     const [vx, vy] = viewport.convertToViewportPoint(tx[4], tx[5]);
 
-    // Precise Cap-Height offset aligns HTML text baseline 1:1 with canvas
+    // Precise Cap-Height offset aligns HTML text baseline 1:1 with canvas and covers Devanagari top matras
+    const isDevanagari = /[\u0900-\u097F]/.test(item.str);
+    const capHeightOffset = isDevanagari ? fontPx * 0.98 : fontPx * 0.80;
+    const boxHeight = isDevanagari ? fontPx * 1.30 : fontPx * 1.08;
+
     const boxX = vx;
-    const boxY = vy - fontPx * 0.82;
+    const boxY = vy - capHeightOffset;
     const boxW = Math.max(6, fontWidthPx);
-    const boxH = Math.max(6, fontPx * 1.08);
+    const boxH = Math.max(6, boxHeight);
 
     const xPct = Math.max(0, (boxX / viewport.width) * 100);
     const yPct = Math.max(0, (boxY / viewport.height) * 100);
@@ -198,16 +204,11 @@ export async function extractPageTextItems(
       !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet &&
       (isTimes || isGaramond || isCambria || isGeorgia || isPalatinoOrBook ||
        fontNameLower.includes('roman') ||
-       fontNameLower.includes('serif') ||
-       fontNameLower.includes('minion') ||
-       fontNameLower.includes('baskerville') ||
        (styleFontFamily.includes('serif') && !styleFontFamily.includes('sans')));
 
     let fontFamily: string;
     if (isMonospace) {
       fontFamily = '"Courier New", Courier, monospace';
-    } else if (isTimes || isSerif || styleFontFamily.includes("serif") || fontNameLower.includes("roman") || fontNameLower.includes("serif")) {
-      fontFamily = '"Times New Roman", Times, Georgia, serif';
     } else if (isArial) {
       fontFamily = 'Arial, "Liberation Sans", Helvetica, sans-serif';
     } else if (isHelvetica) {
@@ -237,6 +238,8 @@ export async function extractPageTextItems(
       fontFamily = 'Arial, Helvetica, sans-serif';
     }
 
+    const baselinePct = (vy / viewport.height) * 100;
+
     extracted.push({
       id: `orig_txt_${originalPageIndex}_${i}`,
       str: item.str,
@@ -244,45 +247,74 @@ export async function extractPageTextItems(
       yPct,
       widthPct: Math.max(0.8, widthPct),
       heightPct: Math.max(0.8, heightPct),
-      fontSize: Math.max(8, Math.round(fontPt * baseScale)),
+      fontSize: Math.round(fontPx),
       fontFamily,
       isBold,
       isItalic,
-    });
+      baselinePct,
+    } as any);
   }
 
-  // 1. Sort extracted items in visual reading order: top-to-bottom, left-to-right
-  extracted.sort((a, b) => {
-    const yDiff = a.yPct - b.yPct;
-    if (Math.abs(yDiff) > 0.4) {
-      return yDiff; // Different vertical lines
-    }
-    return a.xPct - b.xPct; // Same line: sort left-to-right
-  });
+  if (extracted.length === 0) return [];
 
-  // 2. Merge ONLY consecutive words on the EXACT SAME line baseline
-  const merged: ExtractedTextItem[] = [];
-  for (const item of extracted) {
-    if (merged.length > 0) {
-      const prev = merged[merged.length - 1];
-      // Strict same-line vertical threshold (< 0.35%)
-      const sameLine = Math.abs(prev.yPct - item.yPct) < 0.35;
-      const xDistance = item.xPct - (prev.xPct + prev.widthPct);
-      const isNextTo = xDistance >= -0.3 && xDistance < 2.5;
-      const sameStyle = prev.isBold === item.isBold && prev.isItalic === item.isItalic && prev.fontFamily === item.fontFamily;
-      
-      if (sameLine && isNextTo && Math.abs(prev.fontSize - item.fontSize) <= 2 && sameStyle) {
-        const needsSpace = xDistance > 0.08 && !prev.str.endsWith(' ') && !item.str.startsWith(' ');
-        prev.str += (needsSpace ? ' ' : '') + item.str;
-        prev.widthPct = Math.min(100 - prev.xPct, (item.xPct + item.widthPct) - prev.xPct);
-        prev.heightPct = Math.max(prev.heightPct, item.heightPct);
-        continue;
+  // 1. Cluster items into lines by vertical baseline proximity
+  const lines: any[][] = [];
+  const sorted = [...extracted].sort((a: any, b: any) => a.baselinePct - b.baselinePct);
+
+  for (const block of sorted) {
+    let matched = false;
+    const blockBase = block.baselinePct ?? block.yPct;
+    for (const line of lines) {
+      const avgBase = line.reduce((s: number, b: any) => s + (b.baselinePct ?? b.yPct), 0) / line.length;
+      if (Math.abs(blockBase - avgBase) < 0.85) {
+        line.push(block);
+        matched = true;
+        break;
       }
     }
-    merged.push({ ...item });
+    if (!matched) lines.push([block]);
   }
 
-  return merged;
+  lines.sort((a, b) => {
+    const aBase = Math.min(...a.map((b: any) => b.baselinePct ?? b.yPct));
+    const bBase = Math.min(...b.map((b: any) => b.baselinePct ?? b.yPct));
+    return aBase - bBase;
+  });
+
+  // 2. Assemble each clustered line into a single cohesive line item spanning full width
+  const merged: ExtractedTextItem[] = lines.map((line, idx) => {
+    line.sort((a, b) => a.xPct - b.xPct);
+
+    let fullText = line[0].str;
+    for (let i = 1; i < line.length; i++) {
+      const prev = line[i - 1];
+      const curr = line[i];
+      const gap = curr.xPct - (prev.xPct + prev.widthPct);
+      const isCombining = /^[\u0901-\u0903\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963]/.test(curr.str);
+      const needsSpace = !isCombining && gap > 0.1 && !fullText.endsWith(' ') && !curr.str.startsWith(' ');
+      fullText += (needsSpace ? ' ' : '') + curr.str;
+    }
+
+    const minX = Math.min(...line.map(b => b.xPct));
+    const maxX = Math.max(...line.map(b => b.xPct + b.widthPct));
+    const minY = Math.min(...line.map(b => b.yPct));
+    const maxY = Math.max(...line.map(b => b.yPct + b.heightPct));
+
+    return {
+      id: `txt_${originalPageIndex}_${idx}`,
+      str: fullText.trim(),
+      xPct: minX,
+      yPct: minY,
+      widthPct: Math.min(100 - minX, (maxX - minX) + 0.8),
+      heightPct: maxY - minY,
+      fontSize: line[0].fontSize,
+      fontFamily: line[0].fontFamily,
+      isBold: line[0].isBold,
+      isItalic: line[0].isItalic,
+    };
+  });
+
+  return merged.filter(item => item.str.length > 0);
 }
 
 export async function getPdfMetadata(pdfBytes: Uint8Array): Promise<{

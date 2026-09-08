@@ -27,6 +27,45 @@ import {
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
 
+// Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
+function generateSmoothPathData(points: { x: number; y: number }[], width: number, height: number): string {
+  if (!points || points.length === 0) return '';
+  if (points.length === 1) {
+    const px = (points[0].x / 100) * width;
+    const py = (points[0].y / 100) * height;
+    return `M ${px} ${py} L ${px + 0.1} ${py + 0.1}`;
+  }
+  if (points.length === 2) {
+    const p0x = (points[0].x / 100) * width;
+    const p0y = (points[0].y / 100) * height;
+    const p1x = (points[1].x / 100) * width;
+    const p1y = (points[1].y / 100) * height;
+    return `M ${p0x} ${p0y} L ${p1x} ${p1y}`;
+  }
+
+  const p0x = (points[0].x / 100) * width;
+  const p0y = (points[0].y / 100) * height;
+  let d = `M ${p0x} ${p0y}`;
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const curX = (points[i].x / 100) * width;
+    const curY = (points[i].y / 100) * height;
+    const nextX = (points[i + 1].x / 100) * width;
+    const nextY = (points[i + 1].y / 100) * height;
+
+    const midX = (curX + nextX) / 2;
+    const midY = (curY + nextY) / 2;
+
+    d += ` Q ${curX} ${curY}, ${midX} ${midY}`;
+  }
+
+  const lastX = (points[points.length - 1].x / 100) * width;
+  const lastY = (points[points.length - 1].y / 100) * height;
+  d += ` L ${lastX} ${lastY}`;
+
+  return d;
+}
+
 interface PageEditorProps {
   pageInfo: PageInfo;
   pdfBytes: Uint8Array | null;
@@ -84,7 +123,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   // Dragging / Resizing elements state
   const [dragState, setDragState] = useState<{
     elementId: string;
-    action: 'move' | 'resize-br' | 'resize-bl' | 'resize-tr' | 'resize-tl';
+    action: 'move' | 'resize-se' | 'resize-sw' | 'resize-ne' | 'resize-nw';
     startX: number;
     startY: number;
     initialX: number;
@@ -119,15 +158,31 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           setPageSize(dimensions);
         }
 
-        // Extract existing text items for direct click-to-edit
-        const textItems = await extractPageTextItems(
-          pdfBytes,
-          pageInfo.originalPageIndex,
-          pageInfo.rotation
-        );
+        // Universal text extraction across all PDF types
+        const textItems = await extractPageTextItems(pdfBytes, pageInfo.originalPageIndex, pageInfo.rotation);
 
         if (!isCancelled) {
           setExtractedTexts(textItems);
+        }
+
+        // Automatic AI OCR enhancement ONLY for pages containing Devanagari / Hindi script
+        const hasDevanagari = textItems.some((item) => /[\u0900-\u097F]/.test(item.str));
+        if (hasDevanagari && textItems.length > 0) {
+          try {
+            const ocrRes = await fetch('/api/ocr', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lines: textItems }),
+            });
+            if (ocrRes.ok) {
+              const ocrData = await ocrRes.json();
+              if (!isCancelled && ocrData?.success && Array.isArray(ocrData.lines) && ocrData.lines.length > 0) {
+                setExtractedTexts(ocrData.lines);
+              }
+            }
+          } catch {
+            // Graceful fallback to client-extracted lines
+          }
         }
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
@@ -153,16 +208,19 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
   // Convert existing static PDF text to editable text (Bharat Job style)
   const handleConvertExistingText = (item: ExtractedTextItem) => {
-    // 1. Whiteout element covering original static text
+    const isDevanagari = /[\u0900-\u097F]/.test(item.str) || item.fontFamily?.includes('Devanagari');
+    const hindiFont = '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif';
+
+    // 1. Whiteout element covering original static text completely
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
     const whiteout: WhiteoutElement = {
       id: whiteoutId,
       pageIndex: pageInfo.pageIndex,
       type: 'whiteout',
-      x: Math.max(0, item.xPct - 0.1),
-      y: Math.max(0, item.yPct),
-      width: Math.min(100 - item.xPct, item.widthPct + 0.2),
-      height: Math.min(100 - item.yPct, item.heightPct),
+      x: Math.max(0, item.xPct - 0.15),
+      y: Math.max(0, item.yPct - 0.08),
+      width: Math.min(100 - item.xPct + 0.15, item.widthPct + (isDevanagari ? 2.0 : 0.8)),
+      height: Math.min(100 - item.yPct + 0.08, item.heightPct + 0.16),
       color: '#ffffff',
     };
 
@@ -175,10 +233,10 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       text: item.str,
       x: item.xPct,
       y: item.yPct,
-      width: Math.min(100 - item.xPct, item.widthPct + 1.0),
+      width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
       height: item.heightPct,
       fontSize: item.fontSize || 14,
-      fontFamily: item.fontFamily,
+      fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
       color: '#000000',
       isBold: !!item.isBold,
       isItalic: !!item.isItalic,
@@ -315,31 +373,53 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       const deltaX = ((e.clientX - dragState.startX) / displayedWidth) * 100;
       const deltaY = ((e.clientY - dragState.startY) / displayedHeight) * 100;
 
+      const targetEl = pageElements.find((el) => el.id === dragState.elementId);
+      const isImage = targetEl?.type === 'image';
+      const isSignature = targetEl?.type === 'signature';
+      const imgAspect = isImage
+        ? (targetEl as ImageElement).aspectRatio || 1
+        : isSignature
+        ? 2.4
+        : 1;
+      const pageRatio = pageSize.width / pageSize.height;
+
       if (dragState.action === 'move') {
         const newX = Math.max(0, Math.min(100 - dragState.initialW, dragState.initialX + deltaX));
         const newY = Math.max(0, Math.min(100 - dragState.initialH, dragState.initialY + deltaY));
         onUpdateElement(dragState.elementId, { x: newX, y: newY });
-      } else if (dragState.action === 'resize-br') {
-        const targetElement = pageElements.find((el) => el.id === dragState.elementId);
-        if (targetElement?.type === 'image' || targetElement?.type === 'signature') {
-          const initialPixelW = (dragState.initialW / 100) * pageSize.width;
-          const initialPixelH = (dragState.initialH / 100) * pageSize.height;
-          const aspect = initialPixelH > 0 ? initialPixelW / initialPixelH : 1;
-          const newW = Math.max(3, dragState.initialW + deltaX);
-          const newPixelW = (newW / 100) * pageSize.width;
-          const newPixelH = newPixelW / aspect;
-          const newH = (newPixelH / pageSize.height) * 100;
-          onUpdateElement(dragState.elementId, { width: newW, height: newH });
-        } else {
-          const newW = Math.max(2, dragState.initialW + deltaX);
-          const newH = Math.max(2, dragState.initialH + deltaY);
-          onUpdateElement(dragState.elementId, { width: newW, height: newH });
+      } else if (dragState.action === 'resize-se') {
+        let newW = Math.max(2, dragState.initialW + deltaX);
+        let newH = Math.max(2, dragState.initialH + deltaY);
+        if (isImage || isSignature) {
+          newH = (newW * pageRatio) / imgAspect;
         }
-      } else if (dragState.action === 'resize-tl') {
-        const newW = Math.max(2, dragState.initialW - deltaX);
-        const newH = Math.max(2, dragState.initialH - deltaY);
-        const newX = dragState.initialX + deltaX;
-        const newY = dragState.initialY + deltaY;
+        onUpdateElement(dragState.elementId, { width: newW, height: newH });
+      } else if (dragState.action === 'resize-sw') {
+        let newW = Math.max(2, dragState.initialW - deltaX);
+        let newH = Math.max(2, dragState.initialH + deltaY);
+        let newX = dragState.initialX + (dragState.initialW - newW);
+        if (isImage || isSignature) {
+          newH = (newW * pageRatio) / imgAspect;
+        }
+        onUpdateElement(dragState.elementId, { x: newX, width: newW, height: newH });
+      } else if (dragState.action === 'resize-ne') {
+        let newW = Math.max(2, dragState.initialW + deltaX);
+        let newH = Math.max(2, dragState.initialH - deltaY);
+        let newY = dragState.initialY + (dragState.initialH - newH);
+        if (isImage || isSignature) {
+          newH = (newW * pageRatio) / imgAspect;
+          newY = dragState.initialY + (dragState.initialH - newH);
+        }
+        onUpdateElement(dragState.elementId, { y: newY, width: newW, height: newH });
+      } else if (dragState.action === 'resize-nw') {
+        let newW = Math.max(2, dragState.initialW - deltaX);
+        let newH = Math.max(2, dragState.initialH - deltaY);
+        let newX = dragState.initialX + (dragState.initialW - newW);
+        let newY = dragState.initialY + (dragState.initialH - newH);
+        if (isImage || isSignature) {
+          newH = (newW * pageRatio) / imgAspect;
+          newY = dragState.initialY + (dragState.initialH - newH);
+        }
         onUpdateElement(dragState.elementId, { x: newX, y: newY, width: newW, height: newH });
       }
       return;
@@ -348,8 +428,16 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     // Handle Freehand Drawing
     if (!isDrawing || activeTool !== 'annotate' || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / displayedWidth) * 100));
-    const yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / displayedHeight) * 100));
+    let xPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / displayedWidth) * 100));
+    let yPct = Math.max(0, Math.min(100, ((e.clientY - rect.top) / displayedHeight) * 100));
+
+    // For highlighter: If Shift key is held or movement is mostly horizontal, snap Y to start Y for razor-straight line
+    if (activeAnnotateSubtool === 'highlighter' && currentPath && currentPath.length > 0) {
+      const startPt = currentPath[0];
+      if (e.shiftKey || (Math.abs(yPct - startPt.y) < 1.2 && Math.abs(xPct - startPt.x) > 1.2)) {
+        yPct = startPt.y;
+      }
+    }
 
     setCurrentPath((prev) => (prev ? [...prev, { x: xPct, y: yPct }] : [{ x: xPct, y: yPct }]));
   };
@@ -378,9 +466,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         paths: [
           {
             points: currentPath,
-            color: isHighlighter ? '#facc15' : '#ef4444',
-            width: isHighlighter ? 8 : 2.5,
-            opacity: isHighlighter ? 0.4 : 1,
+            color: isHighlighter ? '#fde047' : '#ef4444',
+            width: isHighlighter ? 11 : 2.5,
+            opacity: isHighlighter ? 0.32 : 1,
             isHighlighter,
           },
         ],
@@ -487,12 +575,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         {activeTool === 'text' && (
           <div className="absolute inset-0 z-25 pointer-events-none">
             {extractedTexts
-              .filter((item) => {
-                if (editedOriginalIds.has(item.id)) return false;
-                // Exclude Hindi / Devanagari / complex scripts so native Hindi text is never disrupted
-                const isComplexScript = /[\u0900-\u097F\u0A00-\u0D7F]/.test(item.str);
-                return !isComplexScript;
-              })
+              .filter((item) => !editedOriginalIds.has(item.id))
               .map((item) => (
                 <div
                   key={item.id}
@@ -522,63 +605,14 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           </div>
         )}
 
-        {/* Layer 2: Interactive SVG Layer for Drawings & Paths */}
-        <svg
-          className="absolute inset-0 w-full h-full pointer-events-none z-25"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-        >
-          {/* Rendered Drawing Elements */}
-          {pageElements
-            .filter((el): el is DrawingElement => el.type === 'drawing')
-            .map((el) =>
-              (el.paths || []).map((path, pIdx) => {
-                if (!path.points || path.points.length < 2) return null;
-                const d = path.points.reduce(
-                  (acc, pt, i) => `${acc} ${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`,
-                  ''
-                );
-                return (
-                  <path
-                    key={`${el.id}_${pIdx}`}
-                    d={d}
-                    fill="none"
-                    stroke={path.color}
-                    strokeWidth={path.width * 0.25}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    opacity={path.opacity || 1}
-                    style={
-                      path.isHighlighter
-                        ? { mixBlendMode: 'multiply' }
-                        : undefined
-                    }
-                  />
-                );
-              })
-            )}
-
-          {/* In-progress drawing path */}
-          {currentPath && currentPath.length > 1 && (
-            <path
-              d={currentPath.reduce(
-                (acc, pt, i) => `${acc} ${i === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`,
-                ''
-              )}
-              fill="none"
-              stroke={activeAnnotateSubtool === 'highlighter' ? '#facc15' : '#ef4444'}
-              strokeWidth={activeAnnotateSubtool === 'highlighter' ? 2 : 0.6}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              opacity={activeAnnotateSubtool === 'highlighter' ? 0.4 : 1}
-            />
-          )}
-        </svg>
-
-        {/* Layer 3: Interactive Placed Elements (Text, Whiteout, Images, Signatures, Shapes, Forms, Links) */}
+        {/* Layer 2: Interactive Placed Elements (Text, Whiteout, Images, Signatures, Shapes, Forms, Links) */}
         <div className="absolute inset-0 z-20 pointer-events-none">
           {pageElements.map((el) => {
             const isSelected = selectedElementId === el.id;
+            const canInteract =
+              activeTool === 'select' ||
+              (activeTool === 'text' && el.type === 'text') ||
+              isSelected;
 
             if (el.type === 'drawing') return null; // handled in SVG layer
 
@@ -586,18 +620,27 @@ export const PageEditor: React.FC<PageEditorProps> = ({
               <div
                 key={el.id}
                 onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectElement(el.id);
+                  if (canInteract) {
+                    e.stopPropagation();
+                    onSelectElement(el.id);
+                  }
                 }}
-                className={`absolute group transition-shadow ${activeTool === 'annotate' ? 'pointer-events-none' : 'pointer-events-auto'} ${
+                className={`absolute group transition-shadow ${
+                  el.id.startsWith('el_wo_') || !canInteract
+                    ? 'pointer-events-none'
+                    : 'pointer-events-auto'
+                } ${
                   isSelected
-                    ? 'ring-2 ring-emerald-500 shadow-sm z-30'
-                    : 'hover:ring-1 hover:ring-emerald-300'
+                    ? 'ring-2 ring-emerald-500 ring-offset-1 shadow-md z-30'
+                    : canInteract
+                    ? 'hover:ring-1 hover:ring-emerald-300'
+                    : ''
                 }`}
                 style={{
                   left: `${el.x}%`,
                   top: `${el.y}%`,
-                  width: el.type === 'text' ? 'auto' : `${el.width}%`,
+                  width: el.type === 'text' ? 'max-content' : `${el.width}%`,
+                  maxWidth: el.type === 'text' ? `${Math.max(10, 100 - el.x)}%` : undefined,
                   minWidth: el.type === 'text' ? `${el.width}%` : undefined,
                   height: `${el.height}%`,
                 }}
@@ -606,20 +649,26 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                 {el.type === 'whiteout' && (
                   <div
                     onPointerDown={(e) => {
-                      e.stopPropagation();
-                      onSelectElement(el.id);
-                      setDragState({
-                        elementId: el.id,
-                        action: 'move',
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        initialX: el.x,
-                        initialY: el.y,
-                        initialW: el.width,
-                        initialH: el.height,
-                      });
+                      if (!el.id.startsWith('el_wo_')) {
+                        e.stopPropagation();
+                        onSelectElement(el.id);
+                        setDragState({
+                          elementId: el.id,
+                          action: 'move',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initialX: el.x,
+                          initialY: el.y,
+                          initialW: el.width,
+                          initialH: el.height,
+                        });
+                      }
                     }}
-                    className="w-full h-full cursor-grab active:cursor-grabbing"
+                    className={`w-full h-full ${
+                      el.id.startsWith('el_wo_')
+                        ? 'pointer-events-none'
+                        : 'cursor-grab active:cursor-grabbing'
+                    }`}
                     style={{ backgroundColor: el.color || '#ffffff' }}
                   />
                 )}
@@ -627,7 +676,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                 {/* 2. TEXT */}
                 {el.type === 'text' && (
                   <div className="relative w-full h-full flex items-start">
-                    {/* Compact grip handle when selected */}
+                    {/* Move grip handle on top when selected */}
                     {isSelected && (
                       <div
                         onPointerDown={(e) => {
@@ -643,69 +692,41 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                             initialH: el.height,
                           });
                         }}
-                        className="absolute -top-4 -left-1 bg-emerald-600 hover:bg-emerald-700 text-white p-0.5 rounded-xs flex items-center cursor-grab active:cursor-grabbing shadow-xs z-50 select-none"
-                        title="Drag to move"
+                        className="absolute -top-5 left-0 bg-emerald-600 text-white px-1.5 py-0.5 rounded text-3xs flex items-center space-x-0.5 cursor-grab active:cursor-grabbing shadow-xs z-50 select-none"
                       >
                         <GripHorizontal className="w-3 h-3" />
+                        <span>Move</span>
                       </div>
                     )}
 
-                    {/* Auto-fitting text container that prevents text from shifting or scrolling */}
-                    <div className="relative inline-block w-full min-w-full overflow-visible">
-                      {/* Hidden mirror span to ensure width matches exact text dimensions */}
-                      <span
-                        aria-hidden
-                        className="invisible whitespace-pre block pointer-events-none select-none"
-                        style={{
-                          fontSize: `${(el.fontSize || 14) * zoom}px`,
-                          fontWeight: el.isBold ? 700 : 400,
-                          fontStyle: el.isItalic ? 'italic' : 'normal',
-                          fontFamily: el.fontFamily || 'Arial, Helvetica, sans-serif',
-                          lineHeight: 1.15,
-                          padding: 0,
-                          margin: 0,
-                        }}
-                      >
-                        {el.text || ' '}
-                      </span>
-
-                      {el.text.includes('\\n') ? (
-                        <textarea
-                          ref={(node) => {
-                            if (node && isSelected) node.focus({ preventScroll: true });
-                          }}
-                          value={el.text}
-                          onChange={(e) =>
-                            onUpdateElement(el.id, { text: e.target.value })
-                          }
-                          onBlur={(e) => {
-                            if (!e.target.value.trim()) onDeleteElement(el.id);
-                          }}
-                          onFocus={() => onSelectElement(el.id)}
-                          onPointerDown={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          onClick={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          rows={Math.max(1, el.text.split('\\n').length)}
-                          className="absolute inset-0 w-full h-full outline-none bg-transparent border-none p-0 m-0 resize-none cursor-text select-text overflow-hidden"
+                    {el.text.includes('\n') ? (
+                      <>
+                        {/* Hidden mirror span to measure true text width for this font/weight */}
+                        <span
+                          aria-hidden
+                          className="absolute invisible whitespace-pre pointer-events-none"
                           style={{
                             fontSize: `${(el.fontSize || 14) * zoom}px`,
-                            color: el.color || '#000000',
                             fontWeight: el.isBold ? 700 : 400,
                             fontStyle: el.isItalic ? 'italic' : 'normal',
-                            textDecoration: el.isUnderline ? 'underline' : 'none',
-                            textAlign: el.align || 'left',
-                            fontFamily: el.fontFamily || 'Arial, Helvetica, sans-serif',
-                            lineHeight: 1.15,
+                            fontFamily:
+                              el.fontFamily ||
+                              (el.text && /[\u0900-\u097F]/.test(el.text)
+                                ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
+                                : 'Arial, Helvetica, sans-serif'),
+                            lineHeight: 1.2,
                           }}
-                        />
-                      ) : (
-                        <input
+                        >
+                          {el.text || ' '}
+                        </span>
+                        <textarea
                           ref={(node) => {
                             if (node && isSelected) {
                               node.focus({ preventScroll: true });
-                              node.scrollLeft = 0;
+                              const len = node.value.length;
+                              node.setSelectionRange(len, len);
                             }
                           }}
-                          type="text"
                           value={el.text}
                           onChange={(e) =>
                             onUpdateElement(el.id, { text: e.target.value })
@@ -713,10 +734,10 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                           onBlur={(e) => {
                             if (!e.target.value.trim()) onDeleteElement(el.id);
                           }}
-                          onFocus={() => onSelectElement(el.id)}
-                          onPointerDown={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          onClick={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          className="absolute inset-0 w-full h-full outline-none bg-transparent border-none p-0 m-0 cursor-text select-text"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          rows={Math.max(1, el.text.split('\n').length)}
+                          className="outline-none bg-transparent border-none p-0 m-0 resize-none cursor-text select-text overflow-hidden"
                           style={{
                             fontSize: `${(el.fontSize || 14) * zoom}px`,
                             color: el.color || '#000000',
@@ -724,12 +745,70 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                             fontStyle: el.isItalic ? 'italic' : 'normal',
                             textDecoration: el.isUnderline ? 'underline' : 'none',
                             textAlign: el.align || 'left',
-                            fontFamily: el.fontFamily || 'Arial, Helvetica, sans-serif',
-                            lineHeight: 1.15,
+                            fontFamily:
+                              el.fontFamily ||
+                              (el.text && /[\u0900-\u097F]/.test(el.text)
+                                ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
+                                : 'Arial, Helvetica, sans-serif'),
+                            lineHeight: 1.25,
+                            padding: '0 2px',
+                            letterSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.01em' : 'normal',
+                            wordSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.04em' : 'normal',
+                            width: '100%',
+                            minWidth: '40px',
                           }}
                         />
-                      )}
-                    </div>
+                      </>
+                    ) : (
+                      <input
+                        ref={(node) => {
+                          if (node && isSelected) {
+                            node.focus({ preventScroll: true });
+                            const len = node.value.length;
+                            node.setSelectionRange(len, len);
+                          }
+                        }}
+                        type="text"
+                        value={el.text}
+                        onChange={(e) =>
+                          onUpdateElement(el.id, { text: e.target.value })
+                        }
+                        onBlur={(e) => {
+                          if (!e.target.value.trim()) onDeleteElement(el.id);
+                        }}
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        className="outline-none bg-transparent border-none p-0 m-0 cursor-text select-text block"
+                        style={{
+                          fontSize: `${(el.fontSize || 14) * zoom}px`,
+                          color: el.color || '#000000',
+                          fontWeight: el.isBold ? 700 : 400,
+                          fontStyle: el.isItalic ? 'italic' : 'normal',
+                          textDecoration: el.isUnderline ? 'underline' : 'none',
+                          textAlign: el.align || 'left',
+                          fontFamily:
+                            el.fontFamily ||
+                            (el.text && /[\u0900-\u097F]/.test(el.text)
+                              ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
+                              : 'Arial, Helvetica, sans-serif'),
+                          lineHeight: 1.28,
+                          height: `${(el.fontSize || 14) * zoom * 1.28}px`,
+                          padding: '0 1px',
+                          margin: 0,
+                          letterSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.012em' : 'normal',
+                          wordSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.06em' : 'normal',
+                          boxSizing: 'border-box',
+                          width: '100%',
+                          minWidth: '30px',
+                        }}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -750,12 +829,13 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                         initialH: el.height,
                       });
                     }}
-                    className="w-full h-full cursor-grab active:cursor-grabbing"
+                    className="w-full h-full cursor-grab active:cursor-grabbing select-none"
                   >
                     <img
                       src={el.dataUrl}
                       alt="Embedded"
-                      className="w-full h-full object-contain pointer-events-none"
+                      className="w-full h-full object-fill pointer-events-none select-none block"
+                      draggable={false}
                     />
                   </div>
                 )}
@@ -857,7 +937,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                 {/* 6. FORMS */}
                 {el.type === 'form' && (
                   <div className="relative w-full h-full pointer-events-auto flex items-center justify-center">
-                    {/* Move grip handle when selected */}
+                    {/* Move grip handle on top when selected */}
                     {isSelected && (
                       <div
                         onPointerDown={(e) => {
@@ -873,59 +953,80 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                             initialH: el.height,
                           });
                         }}
-                        className="absolute -top-4 -left-1 bg-emerald-600 hover:bg-emerald-700 text-white p-0.5 rounded-xs flex items-center cursor-grab active:cursor-grabbing shadow-xs z-50 select-none"
-                        title="Drag to move"
+                        className="absolute -top-5 left-0 bg-emerald-600 text-white px-1.5 py-0.5 rounded text-3xs flex items-center space-x-0.5 cursor-grab active:cursor-grabbing shadow-xs z-50 select-none pointer-events-auto"
                       >
                         <GripHorizontal className="w-3 h-3" />
+                        <span>Move</span>
                       </div>
                     )}
 
                     {el.formType === 'checkbox' ? (
-                      <div
+                      <button
+                        type="button"
                         onPointerDown={(e) => {
+                          e.stopPropagation();
                           onSelectElement(el.id);
-                          setDragState({
-                            elementId: el.id,
-                            action: 'move',
-                            startX: e.clientX,
-                            startY: e.clientY,
-                            initialX: el.x,
-                            initialY: el.y,
-                            initialW: el.width,
-                            initialH: el.height,
-                          });
+                          if (activeTool === 'select' || isSelected) {
+                            setDragState({
+                              elementId: el.id,
+                              action: 'move',
+                              startX: e.clientX,
+                              startY: e.clientY,
+                              initialX: el.x,
+                              initialY: el.y,
+                              initialW: el.width,
+                              initialH: el.height,
+                            });
+                          }
                         }}
-                        className="w-full h-full cursor-grab active:cursor-grabbing"
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                          onUpdateElement(el.id, { value: !el.value });
+                        }}
+                        className={`w-full h-full border-2 rounded flex items-center justify-center transition cursor-pointer active:scale-95 touch-manipulation ${
+                          el.value
+                            ? 'bg-emerald-600 border-emerald-700 text-white'
+                            : 'bg-white border-gray-400 hover:border-gray-600'
+                        }`}
+                        aria-label="Form Checkbox"
                       >
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onSelectElement(el.id);
-                            onUpdateElement(el.id, { value: !el.value });
-                          }}
-                          className={`w-full h-full border-2 rounded flex items-center justify-center transition cursor-pointer active:scale-95 touch-manipulation ${el.value ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-white border-gray-400 hover:border-gray-600'}`}
-                          aria-label="Form Checkbox"
-                        >
-                          {el.value && <Check className="w-3.5 h-3.5 stroke-3" />}
-                        </button>
-                      </div>
+                        {el.value && <Check className="w-3.5 h-3.5 stroke-3" />}
+                      </button>
                     ) : (
-                      <div className="w-full h-full relative">
-                        <input
-                          type="text"
-                          value={typeof el.value === 'string' ? el.value : ''}
-                          onChange={(e) => onUpdateElement(el.id, { value: e.target.value })}
-                          onFocus={() => onSelectElement(el.id)}
-                          onPointerDown={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          onClick={(e) => { e.stopPropagation(); onSelectElement(el.id); }}
-                          placeholder="Fillable field..."
-                          className="w-full h-full border border-blue-400/80 bg-blue-50/20 px-1 py-0.5 rounded text-xs focus:bg-white focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                          style={{
-                            fontSize: `${(el.fontSize || 13) * zoom}px`,
-                            color: el.color || '#000000', fontWeight: el.isBold ? 700 : 400, fontStyle: el.isItalic ? 'italic' : 'normal' }}
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        value={typeof el.value === 'string' ? el.value : ''}
+                        onChange={(e) =>
+                          onUpdateElement(el.id, { value: e.target.value })
+                        }
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        onTouchStart={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectElement(el.id);
+                        }}
+                        placeholder={el.placeholder || 'Fill field...'}
+                        className={`w-full h-full px-1.5 py-0.5 rounded focus:outline-none text-gray-900 touch-manipulation text-xs transition-colors ${
+                          isSelected
+                            ? 'bg-blue-50/50 border border-blue-400 shadow-2xs'
+                            : 'bg-transparent border border-transparent hover:border-blue-200'
+                        }`}
+                        style={{
+                          fontSize: `${Math.max(10, (el.fontSize || 12) * zoom)}px`,
+                          color: el.color || '#1e293b',
+                          fontWeight: el.isBold ? 700 : 400,
+                          fontStyle: el.isItalic ? 'italic' : 'normal',
+                          fontFamily: el.fontFamily || 'inherit',
+                        }}
+                      />
                     )}
                   </div>
                 )}
@@ -965,29 +1066,134 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                   </div>
                 )}
 
-                {/* Resize handle (bottom right) when selected */}
+                {/* 4 Corner Resize handles when selected */}
                 {isSelected && (
-                  <div
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      setDragState({
-                        elementId: el.id,
-                        action: 'resize-br',
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        initialX: el.x,
-                        initialY: el.y,
-                        initialW: el.width,
-                        initialH: el.height,
-                      });
-                    }}
-                    className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-emerald-500 border border-white rounded-full cursor-nwse-resize shadow-xs z-40"
-                  />
+                  <>
+                    {/* Top Left */}
+                    <div
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        setDragState({
+                          elementId: el.id,
+                          action: 'resize-nw',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initialX: el.x,
+                          initialY: el.y,
+                          initialW: el.width,
+                          initialH: el.height,
+                        });
+                      }}
+                      className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-emerald-500 border border-white rounded-full cursor-nwse-resize shadow-xs z-40"
+                    />
+                    {/* Top Right */}
+                    <div
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        setDragState({
+                          elementId: el.id,
+                          action: 'resize-ne',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initialX: el.x,
+                          initialY: el.y,
+                          initialW: el.width,
+                          initialH: el.height,
+                        });
+                      }}
+                      className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-emerald-500 border border-white rounded-full cursor-nesw-resize shadow-xs z-40"
+                    />
+                    {/* Bottom Left */}
+                    <div
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        setDragState({
+                          elementId: el.id,
+                          action: 'resize-sw',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initialX: el.x,
+                          initialY: el.y,
+                          initialW: el.width,
+                          initialH: el.height,
+                        });
+                      }}
+                      className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-emerald-500 border border-white rounded-full cursor-nesw-resize shadow-xs z-40"
+                    />
+                    {/* Bottom Right */}
+                    <div
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        setDragState({
+                          elementId: el.id,
+                          action: 'resize-se',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initialX: el.x,
+                          initialY: el.y,
+                          initialW: el.width,
+                          initialH: el.height,
+                        });
+                      }}
+                      className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-emerald-500 border border-white rounded-full cursor-nwse-resize shadow-xs z-40"
+                    />
+                  </>
                 )}
               </div>
             );
           })}
         </div>
+
+        {/* Layer 3: Annotations, Freehand Drawings & Highlighters on top of all elements */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none z-30"
+          viewBox={`0 0 ${pageSize.width} ${pageSize.height}`}
+        >
+          {/* Rendered Drawing Elements */}
+          {pageElements
+            .filter((el): el is DrawingElement => el.type === 'drawing')
+            .map((el) =>
+              (el.paths || []).map((path, pIdx) => {
+                if (!path.points || path.points.length < 2) return null;
+                const d = generateSmoothPathData(path.points, pageSize.width, pageSize.height);
+                return (
+                  <path
+                    key={`${el.id}_${pIdx}`}
+                    d={d}
+                    fill="none"
+                    stroke={path.color}
+                    strokeWidth={path.isHighlighter ? (path.width || 11) : (path.width || 2.5)}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={path.opacity ?? (path.isHighlighter ? 0.32 : 1)}
+                    style={
+                      path.isHighlighter
+                        ? { mixBlendMode: 'multiply' }
+                        : undefined
+                    }
+                  />
+                );
+              })
+            )}
+
+          {/* In-progress drawing path */}
+          {currentPath && currentPath.length > 1 && (
+            <path
+              d={generateSmoothPathData(currentPath, pageSize.width, pageSize.height)}
+              fill="none"
+              stroke={activeAnnotateSubtool === 'highlighter' ? '#fde047' : '#ef4444'}
+              strokeWidth={activeAnnotateSubtool === 'highlighter' ? 11 : 2.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={activeAnnotateSubtool === 'highlighter' ? 0.32 : 1}
+              style={
+                activeAnnotateSubtool === 'highlighter'
+                  ? { mixBlendMode: 'multiply' }
+                  : undefined
+              }
+            />
+          )}
+        </svg>
       </div>
     </div>
   );

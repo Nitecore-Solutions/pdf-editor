@@ -269,7 +269,11 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
         const img = new Image();
         img.src = e.target.result as string;
         img.onload = () => {
-          const aspectRatio = img.width / img.height;
+          const aspectRatio = img.width && img.height ? img.width / img.height : 1;
+          const targetPage = pages[currentPageIndex] || pages[0] || { width: 595, height: 842 };
+          const pageRatio = (targetPage.width || 595) / (targetPage.height || 842);
+          const width = 25;
+          const height = (width * pageRatio) / aspectRatio;
           const newImgElement: ImageElement = {
             id,
             pageIndex: currentPageIndex,
@@ -280,8 +284,8 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
             aspectRatio,
             x: 20,
             y: 20,
-            width: 25,
-            height: (25 * (img.height / img.width) * ((pages[currentPageIndex]?.width || 794) / (pages[currentPageIndex]?.height || 1123))),
+            width,
+            height,
           };
           handleAddElement(newImgElement);
           setSelectedElementId(id);
@@ -298,6 +302,11 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
   // Signature placement handler — places on the currently visible page
   const handleSaveSignature = (dataUrl: string, sigType: 'draw' | 'type' | 'upload', color: string) => {
     const id = 'el_sig_' + Math.random().toString(36).substr(2, 9);
+    const targetPage = pages[currentPageIndex] || pages[0] || { width: 595, height: 842 };
+    const pageRatio = (targetPage.width || 595) / (targetPage.height || 842);
+    const sigAspect = 2.4;
+    const width = 24;
+    const height = (width * pageRatio) / sigAspect;
     const newSig: SignatureElement = {
       id,
       pageIndex: currentPageIndex,
@@ -307,8 +316,8 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       color,
       x: 30,
       y: 40,
-      width: 24,
-      height: 10,
+      width,
+      height,
     };
     handleAddElement(newSig);
     setSelectedElementId(id);

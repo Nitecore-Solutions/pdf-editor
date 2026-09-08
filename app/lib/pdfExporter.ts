@@ -1,51 +1,5 @@
-
-function renderDrawingsToCanvasPng(
-  drawingElements: any[],
-  pageWidthPt: number,
-  pageHeightPt: number
-): Uint8Array | null {
-  try {
-    if (typeof document === 'undefined') return null;
-    const scale = 2.5;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(pageWidthPt * scale);
-    canvas.height = Math.round(pageHeightPt * scale);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    ctx.scale(scale, scale);
-
-    for (const el of drawingElements) {
-      for (const path of el.paths || []) {
-        if (!path.points || path.points.length < 2) continue;
-        ctx.save();
-        ctx.beginPath();
-        ctx.strokeStyle = path.color || '#ff0000';
-        ctx.lineWidth = path.isHighlighter ? (path.width || 8) * 1.6 : (path.width || 2.5);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalAlpha = path.isHighlighter ? 0.38 : (path.opacity || 1);
-
-        const first = path.points[0];
-        ctx.moveTo((first.x / 100) * pageWidthPt, (first.y / 100) * pageHeightPt);
-        for (let i = 1; i < path.points.length; i++) {
-          const pt = path.points[i];
-          ctx.lineTo((pt.x / 100) * pageWidthPt, (pt.y / 100) * pageHeightPt);
-        }
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
-
-    return dataUrlToBytes(canvas.toDataURL('image/png'));
-  } catch (e) {
-    console.warn('Drawing rasterization failed:', e);
-    return null;
-  }
-}
-
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
-import { EditorElement, PageInfo } from '../types/editor';
+import { EditorElement, PageInfo, DrawingElement } from '../types/editor';
 
 // Helper to convert hex color string (#RRGGBB) to pdf-lib rgb(r, g, b)
 function hexToRgb(hex: string) {
@@ -124,6 +78,68 @@ function renderTextToCanvasPng(
     return dataUrlToBytes(dataUrl);
   } catch (e) {
     console.warn('Unicode text rasterization fallback failed:', e);
+    return null;
+  }
+}
+
+// Render freehand drawings and highlighters in a single unified 2D canvas pass to prevent alpha accumulation
+function renderDrawingPathsToCanvasPng(
+  drawings: { paths?: { points: { x: number; y: number }[]; color: string; width: number; opacity: number; isHighlighter?: boolean }[] }[],
+  pageWidthPt: number,
+  pageHeightPt: number
+): Uint8Array | null {
+  try {
+    const scale = 2.5; // 2.5x crisp supersampling
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(pageWidthPt * scale);
+    canvas.height = Math.round(pageHeightPt * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    for (const drawing of drawings) {
+      for (const path of drawing.paths || []) {
+        if (!path.points || path.points.length < 2) continue;
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        const isHighlighter = path.isHighlighter;
+        const strokeWidth = (isHighlighter ? 10 : (path.width || 2.5)) * (scale / 1.3333);
+        ctx.lineWidth = Math.max(1, strokeWidth);
+        ctx.strokeStyle = path.color || (isHighlighter ? '#fde047' : '#ef4444');
+        ctx.globalAlpha = isHighlighter ? 0.35 : (path.opacity ?? 1);
+
+        const pts = path.points;
+        ctx.beginPath();
+        const p0x = (pts[0].x / 100) * canvas.width;
+        const p0y = (pts[0].y / 100) * canvas.height;
+        ctx.moveTo(p0x, p0y);
+
+        for (let i = 1; i < pts.length - 1; i++) {
+          const curX = (pts[i].x / 100) * canvas.width;
+          const curY = (pts[i].y / 100) * canvas.height;
+          const nextX = (pts[i + 1].x / 100) * canvas.width;
+          const nextY = (pts[i + 1].y / 100) * canvas.height;
+
+          const midX = (curX + nextX) / 2;
+          const midY = (curY + nextY) / 2;
+
+          ctx.quadraticCurveTo(curX, curY, midX, midY);
+        }
+
+        const lastX = (pts[pts.length - 1].x / 100) * canvas.width;
+        const lastY = (pts[pts.length - 1].y / 100) * canvas.height;
+        ctx.lineTo(lastX, lastY);
+
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    const dataUrl = canvas.toDataURL('image/png');
+    return dataUrlToBytes(dataUrl);
+  } catch (e) {
+    console.warn('Failed to render drawing to canvas PNG:', e);
     return null;
   }
 }
@@ -356,16 +372,7 @@ export async function exportModifiedPdf({
           }
         }
       } else if (el.type === 'drawing') {
-        const drawingPng = renderDrawingsToCanvasPng([el], pageWidth, pageHeight);
-        if (drawingPng) {
-          const embeddedDrawing = await outputDoc.embedPng(drawingPng);
-          pdfPage.drawImage(embeddedDrawing, {
-            x: 0,
-            y: 0,
-            width: pageWidth,
-            height: pageHeight,
-          });
-        }
+        // Rendered collectively after element loop to maintain proper layer blending
       } else if (el.type === 'form') {
         if (el.formType === 'checkbox') {
           pdfPage.drawRectangle({
@@ -393,40 +400,39 @@ export async function exportModifiedPdf({
             });
           }
         } else {
-          pdfPage.drawRectangle({
-            x: elX,
-            y: elY,
-            width: elWidth,
-            height: elHeight,
-            borderColor: rgb(0.7, 0.7, 0.7),
-            borderWidth: 1,
-            color: rgb(0.97, 0.98, 1),
-          });
+          // Text form field: Do not draw artificial background rectangle or border box!
           if (typeof el.value === 'string' && el.value.trim()) {
+            const fontSizePt = Math.max(6, (el.fontSize || 12) / 1.3333);
+            const textColor = hexToRgb(el.color || '#000000');
+            let fontToUse = helveticaFont;
+            if (el.isBold && el.isItalic) fontToUse = helveticaBoldOblique;
+            else if (el.isBold) fontToUse = helveticaBold;
+            else if (el.isItalic) fontToUse = helveticaOblique;
+
             try {
-              helveticaFont.encodeText(el.value);
+              fontToUse.encodeText(el.value);
               pdfPage.drawText(el.value, {
-                x: elX + 4,
-                y: elY + elHeight / 2 - 5,
-                size: 11,
-                font: helveticaFont,
-                color: rgb(0, 0, 0),
+                x: elX + 2,
+                y: elY + (elHeight - fontSizePt) / 2,
+                size: fontSizePt,
+                font: fontToUse,
+                color: textColor,
               });
             } catch (_) {
               const pngBytes = renderTextToCanvasPng(
                 el.value,
-                11,
-                '#000000',
-                false,
-                false,
-                'Arial, sans-serif',
-                elWidth - 8
+                fontSizePt,
+                el.color || '#000000',
+                !!el.isBold,
+                !!el.isItalic,
+                el.fontFamily || 'Arial, sans-serif',
+                elWidth
               );
               if (pngBytes) {
                 const embedded = await outputDoc.embedPng(pngBytes);
                 const { width: imgW, height: imgH } = embedded.scale(1 / 3);
                 pdfPage.drawImage(embedded, {
-                  x: elX + 4,
+                  x: elX + 2,
                   y: elY + (elHeight - imgH) / 2,
                   width: imgW,
                   height: imgH,
@@ -435,6 +441,25 @@ export async function exportModifiedPdf({
             }
           }
         }
+      }
+    }
+
+    // Embed all drawings & highlighters on this page as a single crisp transparent PNG layer
+    const pageDrawings = pageElements.filter((el): el is DrawingElement => el.type === 'drawing');
+    if (pageDrawings.length > 0) {
+      try {
+        const pngBytes = renderDrawingPathsToCanvasPng(pageDrawings, pageWidth, pageHeight);
+        if (pngBytes) {
+          const embedded = await outputDoc.embedPng(pngBytes);
+          pdfPage.drawImage(embedded, {
+            x: 0,
+            y: 0,
+            width: pageWidth,
+            height: pageHeight,
+          });
+        }
+      } catch (drawErr) {
+        console.warn('Failed to embed drawings layer:', drawErr);
       }
     }
   }
