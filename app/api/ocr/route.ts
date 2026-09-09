@@ -219,20 +219,21 @@ Return ONLY a valid JSON array of objects with structure:
     // 2. Try Gemini with auto-fallback across fast models
     if (geminiKey) {
       const prompt = `You are an expert Indian Language / Devanagari PDF font decoder.
-The following lines were extracted from a Hindi / Bilingual PDF with corrupted legacy font encoding (mismatched matras, garbled conjuncts, split words):
+The following lines were extracted from a Hindi government certificate PDF with corrupted legacy font encoding (mismatched matras, garbled conjuncts, split words):
 ${JSON.stringify(lines.map((l: any, i: number) => ({ index: i, raw: l.str })))}
 
 CRITICAL RULES:
-1. Decode and correct corrupted Hindi characters into 100% standard, grammatically correct, natural Hindi words (e.g., fix corrupted words into proper Hindi like 'अवसर देता है', 'गिरते हैं', 'धैर्य सीखते हैं', 'मुश्किल', 'समर्पित', 'खुशियों', 'बड़ी', 'पन्ना'). Ensure clean word spacing between words.
-2. DO NOT translate English or Latin text into Hindi. If a line or word is in English (or numbers/emails), preserve it in English EXACTLY as is.
-3. Return ONLY valid JSON in this exact structure:
+1. Decode and correct corrupted Hindi characters into 100% standard, grammatically correct, natural Hindi Unicode.
+2. PRESERVE exactly as-is: English words, numbers, dates, names (person names, place names), amounts (₹), IDs, codes, URLs, punctuation.
+3. For mixed lines (Hindi + English), fix only the Hindi parts, keep English/numbers unchanged.
+4. Return ONLY valid JSON array:
 [
-  { "index": 0, "text": "शुद्ध हिंदी वाक्य या English text unchanged" },
+  { "index": 0, "text": "corrected text" },
   { "index": 1, "text": "..." }
 ]`;
 
       // Try fast models in order of availability
-      const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash'];
+      const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
       for (const model of candidateModels) {
         try {
           const response = await fetch(
