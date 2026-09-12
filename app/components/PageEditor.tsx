@@ -165,7 +165,25 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           setExtractedTexts(textItems);
         }
 
-
+        // Automatic AI OCR enhancement ONLY for pages containing Devanagari / Hindi script
+        const hasDevanagari = textItems.some((item) => /[\u0900-\u097F]/.test(item.str));
+        if (hasDevanagari && textItems.length > 0) {
+          try {
+            const ocrRes = await fetch('/api/ocr', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lines: textItems }),
+            });
+            if (ocrRes.ok) {
+              const ocrData = await ocrRes.json();
+              if (!isCancelled && ocrData?.success && Array.isArray(ocrData.lines) && ocrData.lines.length > 0) {
+                setExtractedTexts(ocrData.lines);
+              }
+            }
+          } catch {
+            // Graceful fallback to client-extracted lines
+          }
+        }
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
           console.error('Failed to render PDF page:', err);
