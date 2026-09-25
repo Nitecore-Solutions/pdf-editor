@@ -166,13 +166,17 @@ export async function extractPageTextItems(
     const styleFontFamily = (fontStyleObj.fontFamily || '').toLowerCase();
 
     // Detect Bold
+    const rawFontWeight = (fontStyleObj as any).fontWeight;
+    const fontWeightNum = typeof rawFontWeight === 'number' ? rawFontWeight : (typeof rawFontWeight === 'string' ? parseInt(rawFontWeight, 10) : NaN);
     const isBold = 
       fontNameLower.includes('bold') || 
       fontNameLower.includes('black') || 
       fontNameLower.includes('heavy') || 
       fontNameLower.includes('semibold') || 
       fontNameLower.includes('medium') ||
-      (styleFontFamily.includes('bold') && !styleFontFamily.includes('regular'));
+      (styleFontFamily.includes('bold') && !styleFontFamily.includes('regular')) ||
+      rawFontWeight === 'bold' ||
+      (!isNaN(fontWeightNum) && fontWeightNum >= 600);
 
     // Detect Italic
     const isItalic = 
@@ -309,8 +313,8 @@ export async function extractPageTextItems(
       heightPct: maxY - minY,
       fontSize: line[0].fontSize,
       fontFamily: line[0].fontFamily,
-      isBold: line[0].isBold,
-      isItalic: line[0].isItalic,
+      isBold: line.some((item: any) => item.isBold),
+      isItalic: line.some((item: any) => item.isItalic),
     };
   });
 
