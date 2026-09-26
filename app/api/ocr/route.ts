@@ -28,6 +28,7 @@ function localDecodeFallback(text: string): string {
   s = s.replace(/आवश्यकिय/g, 'आवश्यकता').replace(/आवश्यकतय/g, 'आवश्यकता');
   s = s.replace(/ह\s*िी\s+है/g, 'होती है').replace(/ह\s*िय\s+है/g, 'होता है').replace(/ह\s*गय/g, 'होगा');
   s = s.replace(/इसहलए/g, 'इसलिए');
+  s = s.replace(/ललए/g, 'लिए');
   s = s.replace(/रक्षय/g, 'रक्षा');
   s = s.replace(/करनय/g, 'करना');
   s = s.replace(/हजम्मेदयरी/g, 'जिम्मेदारी');
@@ -146,8 +147,11 @@ function localDecodeFallback(text: string): string {
   s = s.replace(/शकत\s*ब\s*ों/g, 'किताबों').replace(/कित\s*ब\s*ों/g, 'किताबों');
   s = s.replace(/शवक\s*स/g, 'विकास');
   s = s.replace(/शदय\s*गय/g, 'दिया गया');
-  s = s.replace(/श(?![िाीुूृेैोौंः्])([कदवलमजनसतधचड])/g, (m, c) => c + '\u093F');
-  s = s.replace(/द(?![िाीुूृेैोौंः्])([कखगघचछजझटठडढणतथदधनपफबभमयरलवशषसह])/g, (m, c) => c + '\u093F');
+  // NOTE: the blanket "insert ि after श/द" rules that used to live here were
+  // removed. They rewrote valid words - "दर" became "दिर", "दफ्त" became
+  // "दिफ्त" - which is the same class of bug that garbled otherwise-correct
+  // Hindi. Word-level verification now lives in /api/verify-text, where a bad
+  // answer can only ever affect a single word.
   s = s.replace(/\s+/g, ' ').trim();
   return s.normalize('NFC');
 }

@@ -229,15 +229,95 @@ export function pageLooksBroken(
   ).length;
   if (broken === 0) return false;
 
-  // A single flagged line in an otherwise clean page is not enough to send the
-  // whole page through a model; trust the cheap repairs for that.
-  if (broken === 1 && devanagariLines.length >= 8) return false;
+  // One structurally broken line in a page that has more than a line or two of
+  // Hindi is a local glitch, not a broken font. The page-level pass rewrites
+  // whole lines, so escalating on a single flag would risk every other line for
+  // no benefit - the word-level checker handles isolated damage safely.
+  if (broken === 1 && devanagariLines.length > 2) return false;
 
   return broken / devanagariLines.length >= threshold;
 }
 
 export function isDevanagari(text: string): boolean {
   return !!text && DEVANAGARI_RANGE.test(text);
+}
+
+/** Split a line into whitespace-delimited tokens, keeping the separators. */
+function tokenize(text: string): string[] {
+  return (text || '').split(/(\s+)/).filter((t) => t.length > 0);
+}
+
+// Devanagari is not in \w, so a token's core has to be identified by code point
+// rather than by \b. U+0900-U+097F covers the script; everything else is treated
+// as punctuation to be preserved around the core.
+//
+// U+0964 (danda) and U+0965 (double danda) are sentence punctuation that happen
+// to live inside the Devanagari block, so they are excluded. U+093C (nukta) and
+// U+0966-U+096F (digits) are genuine word characters and are kept - treating the
+// nukta as punctuation would split "बढ़ाएं" in half.
+const isWordChar = (ch: string) => {
+  const c = ch.codePointAt(0) ?? 0;
+  if (c === 0x0964 || c === 0x0965) return false; // । ॥
+  if (c >= 0x0900 && c <= 0x097f) return true;
+  if (c >= 0x0041 && c <= 0x005a) return true;
+  if (c >= 0x0061 && c <= 0x007a) return true;
+  if (c >= 0x0030 && c <= 0x0039) return true;
+  if (c >= 0x00c0 && c <= 0x024f) return true;
+  if (c === 0x200c || c === 0x200d) return true; // ZWNJ / ZWJ
+  return false;
+};
+
+/** Split off leading/trailing punctuation, returning [core, prefix, suffix]. */
+function splitToken(token: string): { prefix: string; core: string; suffix: string } {
+  let start = 0;
+  let end = token.length;
+  while (start < end && !isWordChar(token[start])) start++;
+  while (end > start && !isWordChar(token[end - 1])) end--;
+  return {
+    prefix: token.slice(0, start),
+    core: token.slice(start, end),
+    suffix: token.slice(end),
+  };
+}
+
+/** Unique Devanagari words in a line, for the spell checker. */
+export function collectDevanagariTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const part of tokenize(text)) {
+    if (/^\s+$/.test(part)) continue;
+    const { core } = splitToken(part);
+    if (core && DEVANAGARI_RANGE.test(core) && core.length > 1) out.push(core);
+  }
+  return out;
+}
+
+/**
+ * Apply a word-level correction map to a line.
+ *
+ * Only whole tokens are replaced, and a token is only replaced when its bare
+ * core is a key in the map. This keeps a correct occurrence of a substring from
+ * being mangled by a correction meant for a different word.
+ *
+ * Returns the original string when nothing changed so callers can cheaply detect
+ * the no-op case.
+ */
+export function applyTokenCorrections(text: string, corrections: Record<string, string>): string {
+  if (!text || !corrections) return text;
+  const keys = Object.keys(corrections);
+  if (keys.length === 0) return text;
+  const lookup = new Map(keys.map((k) => [k, corrections[k]]));
+
+  let changed = false;
+  const out = tokenize(text).map((part) => {
+    if (/^\s+$/.test(part)) return part;
+    const { prefix, core, suffix } = splitToken(part);
+    const replacement = lookup.get(core);
+    if (!replacement || replacement === core) return part;
+    changed = true;
+    return prefix + replacement + suffix;
+  });
+
+  return changed ? out.join('') : text;
 }
 
 /**

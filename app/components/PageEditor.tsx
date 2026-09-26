@@ -26,7 +26,12 @@ import {
   LinkElement
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
-import { pageLooksBroken, DEVANAGARI_FONT_STACK } from '../lib/devanagari';
+import {
+  pageLooksBroken,
+  applyTokenCorrections,
+  collectDevanagariTokens,
+  DEVANAGARI_FONT_STACK,
+} from '../lib/devanagari';
 import { RichTextEditor } from './RichTextEditor';
 
 // Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
@@ -165,6 +170,44 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
         if (!isCancelled) {
           setExtractedTexts(textItems);
+        }
+
+        // Word-level spell check.
+        //
+        // The structural repairs above cannot see damage like "ललए" (two
+        // consonants, perfectly well-formed) where the word is "लिए", and the
+        // page-level OCR gate deliberately stays shut on mostly-clean pages.
+        // Checking isolated words closes that gap safely: the model may only
+        // return a mapping for words it believes are misspelled, so correct
+        // lines are never rewritten and a failure changes nothing.
+        if (textItems.length > 0) {
+          try {
+            const tokens = [
+              ...new Set(textItems.flatMap((t) => collectDevanagariTokens(t.str))),
+            ];
+            if (tokens.length > 0) {
+              const res = await fetch('/api/verify-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tokens }),
+                signal: AbortSignal.timeout(45_000),
+              });
+              const data = res.ok ? await res.json() : null;
+              const corrections: Record<string, string> | undefined = data?.corrections;
+              if (!isCancelled && corrections && Object.keys(corrections).length > 0) {
+                setExtractedTexts((prev) =>
+                  prev.map((t) => {
+                    const str = applyTokenCorrections(t.str, corrections);
+                    if (str === t.str) return t;
+                    // Length changed, so any per-segment runs no longer line up.
+                    return { ...t, str, runs: undefined };
+                  })
+                );
+              }
+            }
+          } catch {
+            // Leave the extracted text untouched on any failure.
+          }
         }
 
         // Model-assisted repair, but only for pages whose font mapping is
