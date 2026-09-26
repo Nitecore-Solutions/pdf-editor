@@ -159,7 +159,11 @@ export async function extractPageTextItems(
 
   for (let i = 0; i < rawItems.length; i++) {
     const item = rawItems[i];
-    if (!item.str || !item.str.trim()) continue;
+    // Whitespace-only items are kept on purpose. They are dropped in most PDFs
+    // by this filter, which throws away the document's own word spacing and
+    // leaves the gap heuristic to guess - and in sample2 328 of 728 items are
+    // exactly that, so words welded together ("मेंिहने" for "में िहने").
+    if (!item.str) continue;
 
     const tx = item.transform; // [a, b, c, d, x, y]
     // Calculate font size in points and CSS pixels
@@ -288,7 +292,10 @@ export async function extractPageTextItems(
       str: item.str,
       xPct,
       yPct,
-      widthPct: Math.max(0.8, widthPct),
+      // The true width, not the floored one. A space item is often only ~0.25%
+      // wide, and padding it to 0.8% would push past the next item's origin and
+      // swallow the gap that separates the following word.
+      widthPct: Math.max(0.05, widthPct),
       heightPct: Math.max(0.8, heightPct),
       fontSize: Math.round(fontPx),
       fontFamily,
@@ -379,7 +386,18 @@ function orderItemsForLogicalText(line: any[]): any[] {
 
   // 2. Assemble each clustered line into a single cohesive line item spanning full width
   const merged: ExtractedTextItem[] = lines.map((line, idx) => {
-    line.sort((a, b) => a.xPct - b.xPct);
+    // Sort by x, but only when the difference is meaningful.
+    //
+    // Some items come back with a width of 0 because pdf.js cannot measure a
+    // damaged text item, and its x is then a poor proxy for where the glyphs
+    // really sit. In sample2 " ध्य" (x=304.3) and "ान" (x=304.1) differ by
+    // two tenths of a point but must stay in content-stream order, or the word
+    // "ध्यान" comes out reversed. Treating near-identical x as equal keeps the
+    // stream order that the writer intended, and Array#sort is stable.
+    line.sort((a, b) => {
+      const delta = a.xPct - b.xPct;
+      return Math.abs(delta) < 0.06 ? 0 : delta;
+    });
     const ordered = orderItemsForLogicalText(line);
 
     // Track styling per segment rather than collapsing the line to a single
@@ -397,20 +415,77 @@ function orderItemsForLogicalText(line: any[]): any[] {
     let fullText = ordered[0].str;
     push(ordered[0].str, !!ordered[0].isBold, !!ordered[0].isItalic);
 
+    /**
+     * True when the current item opens with a matra and the text before it ends
+     * in a bare consonant, which means the two are one word that the font split
+     * in two: "ध्य" + "ान" is "ध्यान", "बोंद" + "िखना" is "बोंदिखना".
+     *
+     * A preceding word that already ends in a vowel sign is complete, so the
+     * space stays and the two are not welded: "में" + "िहने".
+     */
+    const joinsPreviousWord = (currStr: string): boolean => {
+      if (!/^[\u093E-\u094D\u0962\u0963]/.test(currStr)) return false;
+      const trimmed = fullText.replace(/\s+$/, '');
+      if (!trimmed) return false;
+      const last = [...trimmed].pop() ?? '';
+      // A bare consonant or a half-form can still take a matra; a completed
+      // vowel sign cannot.
+      return /[\u0915-\u0939\u0958-\u095F\u0978-\u097F\u094D]/.test(last);
+    };
+
+    /**
+     * True when a real space item sits where the font actually split one word
+     * in two, and must therefore be dropped.
+     *
+     * These PDFs emit a genuine space item between "ध्य" and "ान" even though
+     * the word is "ध्यान", and between "बोंद" and "िखना" for "बोंदिखना". The
+     * space is in the content stream, so the gap heuristic cannot suppress it;
+     * it has to be decided here, with a look-ahead at the next real item.
+     */
+    const spaceItemIsSpurious = (index: number): boolean => {
+      const before = fullText.replace(/\s+$/, '');
+      if (!before) return false;
+      const last = [...before].pop() ?? '';
+      // Only a bare consonant or half-form can still take a matra; a word that
+      // already ends in a vowel sign is complete ("में" stays separate from
+      // whatever follows).
+      if (!/[\u0915-\u0939\u0958-\u095F\u0978-\u097F\u094D]/.test(last)) return false;
+      for (let j = index + 1; j < ordered.length; j++) {
+        const next = ordered[j];
+        if (!next.str.trim()) continue;
+        return /^[\u093E-\u094D\u0962\u0963]/.test(next.str);
+      }
+      return false;
+    };
+
     for (let i = 1; i < ordered.length; i++) {
       const prev = ordered[i - 1];
       const curr = ordered[i];
+
+      // A whitespace-only item that splits one word is not emitted at all.
+      if (curr.str && !curr.str.trim() && spaceItemIsSpurious(i)) continue;
+
       const gap = curr.xPct - (prev.xPct + prev.widthPct);
       // Never space out a mark that belongs to the cluster before it.
       const isCombining = isOrphanMatraToken(curr.str) || /^[\u0901-\u0903\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963]/.test(curr.str);
-      const needsSpace = !isCombining && gap > 0.1 && !fullText.endsWith(' ') && !curr.str.startsWith(' ');
+      const needsSpace =
+        !isCombining &&
+        !joinsPreviousWord(curr.str) &&
+        gap > 0.1 &&
+        !fullText.endsWith(' ') &&
+        !curr.str.startsWith(' ');
       if (needsSpace) {
         fullText += ' ';
         // The separating space belongs to the preceding run visually.
         push(' ', !!prev.isBold, !!prev.isItalic);
       }
-      fullText += curr.str;
-      push(curr.str, !!curr.isBold, !!curr.isItalic);
+      // An item may carry its own leading space even right after a space item,
+      // which would double up ("भी " + " ध्य"). Keep the wider gap but emit a
+      // single separator.
+      const text = fullText.endsWith(' ') ? curr.str.replace(/^ +/, '') : curr.str;
+      if (text !== curr.str && !text) continue;
+      fullText += text;
+      push(text, !!curr.isBold, !!curr.isItalic);
     }
 
     // Apply the unambiguous repairs *per piece* rather than to the joined line.

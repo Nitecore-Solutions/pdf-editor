@@ -103,6 +103,26 @@ console.log('\n--- repair must not damage run structure ---');
   eq('no run lost its spaces', repaired.filter((r) => r.text.trim() === '').length, 0);
 }
 
+console.log('\n--- spacing is never touched ---');
+// sample2 emits 328 whitespace-only text items. Treating a separator as an empty
+// token and dropping it welded words together, so whitespace must pass through
+// untouched at every level.
+for (const w of [' ', '  ', ' \t ', '\n']) {
+  eq('whitespace survives verbatim ' + JSON.stringify(w), repairHindiLine(w).text, w);
+}
+eq(
+  'space between words survives repair',
+  repairHindiLine('के ' + cp(L, L, E) + ' और').text,
+  'के ' + cp(L, I, E) + ' और'
+);
+eq(
+  'leading and trailing space survive repair',
+  repairHindiLine(' ' + cp(L, L, E) + ' ').text,
+  ' ' + cp(L, I, E) + ' '
+);
+eq('no space is invented', repairHindiLine('बनाएं।').text, 'बनाएं।');
+eq('no double space is invented', repairHindiLine('बनाएं। और').text, 'बनाएं। और');
+
 console.log('\n--- idempotence ---');
 for (const l of ['के ' + cp(L, L, E) + ' और', 'नहीं आएगा जरूर', cp(B, N, AA, E, NUKTA, O, ANUS) + ' क्य?']) {
   const once = repairHindiLine(l).text;

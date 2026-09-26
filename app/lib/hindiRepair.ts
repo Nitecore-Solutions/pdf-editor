@@ -163,6 +163,10 @@ export function repairTokenStructure(token: string): string {
   let chars = [...token];
   if (chars.length === 0) return token;
 
+  // Whitespace is not a word and must be passed through untouched: the spacing
+  // between two words is the only thing holding them apart.
+  if (chars.every((c) => /\s/.test(c))) return token;
+
   // A token made only of marks carries no meaning. It is dropped rather than
   // returned empty-string, because an empty result would blank the word
   // position in the line and merge two neighbours together. pdf.js emits these
@@ -926,21 +930,35 @@ export function repairHindiLine(text: string): { text: string; changes: number }
     if (final && [...final].length < 2) final = core;
 
     // A token that was only combining marks is noise with no recoverable
-    // content. It is removed along with its trailing space rather than left
-    // behind as a stray "ो़ों" in the output.
-    if (final === '') return '';
+    // content. Whitespace is never treated as noise, since it is the only
+    // thing keeping two words apart.
+    if (final === '' && core.trim() !== '') return '';
 
     if (final !== core) changes++;
     return prefix + final + suffix;
   });
 
-  // Re-join and tidy. A token that collapsed to nothing takes its adjacent
-  // space with it, so a noise fragment does not leave a double space behind.
-  const joined = out
-    .filter((part, i) => part !== '' || (i === 0 || out[i - 1] === ''))
-    .join('');
-  return {
-    text: joined.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, ''),
-    changes,
-  };
+  // Re-join, tidying only where a token actually disappeared.
+  //
+  // A blanket "collapse runs of spaces, strip the trailing one" pass looks
+  // harmless but destroys real information. The PDF's own separators are the
+  // only thing holding two words apart - in sample2, 328 of the 728 text items
+  // are nothing but a space - and pdfRenderer trims the finished line anyway.
+  // So the spacing is left byte-identical unless a dropped token left two
+  // separators sitting next to each other.
+  const kept: string[] = [];
+  let dropped = false;
+  for (const part of out) {
+    if (part === '') {
+      dropped = true;
+      continue;
+    }
+    if (dropped && kept.length && isSpace(kept[kept.length - 1]) && isSpace(part)) {
+      kept[kept.length - 1] = part;
+    } else {
+      kept.push(part);
+    }
+    dropped = false;
+  }
+  return { text: kept.join(''), changes };
 }
