@@ -7,23 +7,19 @@
  *
  * This module provides two things, in deliberately different tiers:
  *
- *  1. `repairDevanagari` - a small set of repairs that are *unambiguously*
- *     correct. A pre-base matra can never follow another matra, a virama can
- *     never dangle, and an immediately repeated matra is a duplication
- *     artefact. These are safe to apply to every line unconditionally.
+ * This module is the *structural* layer only: repairs that are unambiguously
+ * correct regardless of language knowledge. A pre-base matra can never follow
+ * another matra, a virama can never dangle, and a repeated matra is a
+ * duplication artefact. These are safe to apply to every line unconditionally.
  *
- *     Orphan matras are deliberately *kept*. A lone matra usually means our own
- *     x-gap logic slipped a space between a base and its matra, and dropping it
- *     would corrupt a line that was otherwise fine.
+ * Orphan matras are deliberately *kept*. A lone matra usually means the x-gap
+ * logic slipped a space between a base and its matra, and dropping it would
+ * corrupt a line that was otherwise fine.
  *
- *  2. `findDevanagariIssues` / `pageLooksBroken` - structural health signals
- *     used to decide whether a page needs the heavier (model-assisted) repair
- *     pass. Semantic damage such as a wrong base consonant leaves no structural
- *     trace, so a page where a meaningful share of lines is structurally broken
- *     is treated as globally broken.
- *
- * Nothing here invents characters. When the cheap repairs are not enough the
- * caller escalates to /api/ocr rather than guessing.
+ * Damage that needs actual knowledge of Hindi - a wrong base consonant, a
+ * non-standard but valid spelling - is handled by hindiRepair.ts, which adds
+ * orthographic validation, suffix morphology and a lexicon. Nothing in the
+ * codebase invents characters or calls a network service.
  */
 
 export const DEVANAGARI_RANGE = /[\u0900-\u097F]/;
@@ -248,7 +244,7 @@ export function pageLooksBroken(
  * These are applied unconditionally, with no model involved, because they are
  * linguistically unambiguous and because a repair feature that silently does
  * nothing whenever the API is rate-limited is not a repair feature. The
- * provider check in /api/verify-text handles everything else.
+ * provider check in hindiRepair.ts handles everything else.
  *
  * Each entry is anchored to word boundaries; a bare substring rule here would
  * corrupt unrelated words.

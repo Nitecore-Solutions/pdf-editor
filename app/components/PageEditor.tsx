@@ -26,12 +26,8 @@ import {
   LinkElement
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
-import {
-  pageLooksBroken,
-  applyTokenCorrections,
-  collectDevanagariTokens,
-  DEVANAGARI_FONT_STACK,
-} from '../lib/devanagari';
+import { DEVANAGARI_FONT_STACK, DEVANAGARI_RANGE } from '../lib/devanagari';
+import { repairHindiLine } from '../lib/hindiRepair';
 import { RichTextEditor } from './RichTextEditor';
 
 // Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
@@ -172,85 +168,30 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           setExtractedTexts(textItems);
         }
 
-        // Word-level spell check.
+        // Word-level repair, entirely local.
         //
-        // The structural repairs above cannot see damage like "ललए" (two
-        // consonants, perfectly well-formed) where the word is "लिए", and the
-        // page-level OCR gate deliberately stays shut on mostly-clean pages.
-        // Checking isolated words closes that gap safely: the model may only
-        // return a mapping for words it believes are misspelled, so correct
-        // lines are never rewritten and a failure changes nothing.
+        // This used to call a spell-check API, which meant a Hindi PDF was only
+        // editable while that service was reachable and the key was inside its
+        // quota. It now runs in-process: structural fixes, orthographic
+        // validation, suffix morphology and lexicon snapping. Instant, offline,
+        // unmetered, and it cannot fail because a model name was retired.
         if (textItems.length > 0) {
-          try {
-            const tokens = [
-              ...new Set(textItems.flatMap((t) => collectDevanagariTokens(t.str))),
-            ];
-            if (tokens.length > 0) {
-              const res = await fetch('/api/verify-text', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tokens }),
-                signal: AbortSignal.timeout(45_000),
-              });
-              const data = res.ok ? await res.json() : null;
-              // A dead model list or a rate-limited provider must not look the
-              // same as "nothing needed fixing", so the reason is surfaced.
-              if (data && data.success === false) {
-                console.warn(
-                  `[verify-text] Hindi spell check unavailable, leaving text as extracted: ${data.degraded}`
-                );
-              }
-              const corrections: Record<string, string> | undefined = data?.corrections;
-              if (!isCancelled && corrections && Object.keys(corrections).length > 0) {
-                setExtractedTexts((prev) =>
-                  prev.map((t) => {
-                    const str = applyTokenCorrections(t.str, corrections);
-                    if (str === t.str) return t;
-                    // Length changed, so any per-segment runs no longer line up.
-                    return { ...t, str, runs: undefined };
-                  })
-                );
-              }
-            }
-          } catch {
-            // Leave the extracted text untouched on any failure.
-          }
+          const repairedLines = textItems.map((t) => {
+            if (!DEVANAGARI_RANGE.test(t.str)) return t;
+            const { text, changes } = repairHindiLine(t.str);
+            if (!changes) return t;
+            // Length changed, so any per-segment runs no longer line up.
+            return { ...t, str: text, runs: undefined };
+          });
+          if (!isCancelled) setExtractedTexts(repairedLines);
         }
 
-        // Model-assisted repair, but only for pages whose font mapping is
-        // genuinely broken.
-        //
-        // Previously every page containing Devanagari was pushed through the
-        // OCR endpoint, which "corrected" already-correct lines and produced the
-        // garbled Hindi users were seeing. A clean page is now left byte-for-byte
-        // alone; only a page whose lines are structurally broken escalates.
-        if (pageLooksBroken(textItems.map((t) => ({ text: t.str, issues: t.devanagariIssues ?? [] })))) {
-          try {
-            const ocrRes = await fetch('/api/ocr', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lines: textItems }),
-              signal: AbortSignal.timeout(60_000),
-            });
-            if (ocrRes.ok) {
-              const ocrData = await ocrRes.json();
-              if (!isCancelled && ocrData?.success && Array.isArray(ocrData.lines) && ocrData.lines.length > 0) {
-                // Keep the freshly extracted geometry (which is measured, not
-                // inferred) and take only the repaired text from the model.
-                const repairedText = new Map<string, string>(
-                  ocrData.lines.map((l: any) => [l.id, l.str])
-                );
-                setExtractedTexts(
-                  textItems.map((t) =>
-                    repairedText.has(t.id) ? { ...t, str: repairedText.get(t.id)! } : t
-                  )
-                );
-              }
-            }
-          } catch {
-            // Graceful fallback: the deterministic repairs already applied stand.
-          }
-        }
+        // The model-assisted pass for severely broken pages is gone. It was the
+        // last thing in the app that needed a network call or an API key, and
+        // the local engine above handles the common corruptions. For a page
+        // where the font's character map is destroyed beyond recovery, the
+        // extracted text is left as-is: an honest partial repair beats a
+        // confident rewrite of a document the user is about to edit.
       } catch (err: any) {
         if (err?.name !== 'RenderingCancelledException') {
           console.error('Failed to render PDF page:', err);
