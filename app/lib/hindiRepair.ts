@@ -197,16 +197,53 @@ export function repairTokenStructure(token: string): string {
   while (chars.length && isVirama(chars[chars.length - 1])) chars.pop();
 
   // Standard Hindi writes the causative/perfective participle as -ाएं / -ाए.
-  // -ायें and -ाये are never correct, so this is a law rather than a guess and
-  // applies unconditionally: बनायें -> बनाएं, बढ़ायें -> बढ़ाएं, जायें -> जाएं.
   //
-  // Anchored to a word boundary, and only when the token has other Devanagari
-  // content around the match. The bare global pattern also rewrote the
-  // completely valid सही (sahi) into ही, because स + ा + य + ी happens to
-  // contain the य of the pattern.
+  // The patterns below are built from explicit code points rather than written
+  // as literals on purpose. A literal "ो" is trivially corrupted into U+0913
+  // (the independent vowel ओ) instead of U+094B (the o-matra), and a pattern
+  // built from the wrong code point silently never matches. That exact mistake
+  // shipped here first, which made the whole rule dead code.
+  const AA = '\u093E'; // ा
+  const E = '\u090F'; // ए
+  const O = '\u094B'; // ो
+  const ANUS = '\u0902'; // ं
+  const YA = '\u092F'; // य
+  const E_MATRA = '\u0947'; // े
+
+  // Two separate shapes turn up in these fonts and both are wrong:
+  //
+  //   बनायें / बढ़ायें  ->  बनाएं / बढ़ाएं   (the य is spurious)
+  //   बढाएों           ->  बढ़ाएं            (the ो is a doubled vowel sign)
+  //
+  // The second shape is the one the extractor actually produces, and it is
+  // structurally *legal* - ए followed by ो is two valid vowel signs - so no
+  // orthography check catches it. Only a spelling law can.
+  //
+  // Anchored to a word boundary and length-guarded, because a bare global
+  // pattern matched inside perfectly valid words: सही (स + ा + य + ी) was being
+  // rewritten to ही.
   const joined = chars.join('');
   if (joined.length > 3) {
-    return joined.replace(/ायें(?=$|[^ऀ-ॿ])/g, 'ाएं').replace(/ाये(?=$|[^ऀ-ॿ])/g, 'ाए');
+    return joined
+      // The locative -ाओं is a different word family from the participle and
+      // must be handled first, or the participle rules below turn जहाों into
+      // जहाएं. Standard is -ां: जहां, वहां, यहां. Built from code points for the
+      // same reason as everything else here.
+      .replace(
+        new RegExp('(जह|वह|यह|कह|कुछ|कौन)' + AA + O + ANUS, 'g'),
+        '$1' + AA + ANUS
+      )
+      // ाए + ो + ं  ->  ाए + ं      (doubled vowel sign: बढाएों -> बढाएं)
+      .replace(new RegExp(AA + E + O + ANUS, 'g'), AA + E + ANUS)
+      // ा + ो + ं    ->  ाए + ं
+      .replace(new RegExp(AA + O + ANUS, 'g'), AA + E + ANUS)
+      // ा + य + े + ं -> ाए + ं       (spurious ya:   बनायें -> बनाएं)
+      .replace(new RegExp(AA + YA + E_MATRA + ANUS, 'g'), AA + E + ANUS)
+      .replace(new RegExp(AA + YA + E_MATRA, 'g'), AA + E)
+      // ा + य + ो     ->  ाए + ं
+      .replace(new RegExp(AA + YA + O, 'g'), AA + E + ANUS)
+      .replace(new RegExp(AA + E + O, 'g'), AA + E)
+      .replace(new RegExp(AA + O, 'g'), AA + E);
   }
   return joined;
 }
@@ -219,17 +256,30 @@ export function repairTokenStructure(token: string): string {
  * Hindi is agglutinative, so the right suffix normalises most verb forms. Order
  * matters: longer suffixes must be tried first.
  */
+// Built from code points, for the reason given above: a literal "ो" silently
+// becomes U+0913 rather than U+094B and the rule becomes dead code.
+const AA = 'ा';
+const E = 'ए';
+const O = 'ो';
+const ANUS = 'ं';
+const YA = 'य';
+const E_MATRA = 'े';
+const II = 'ी';
+
 const SUFFIX_RULES: [RegExp, string][] = [
-  // Causative / perfective participle: standard Hindi is -ाएं / -ाए, never
-  // -ायें / -ाये / -ाओं.
-  [/ाओं$/, 'ाएं'],
-  [/ाओ$/, 'ाए'],
-  [/ायें$/, 'ाएं'],
-  [/ाये$/, 'ाए'],
-  [/ायो$/, 'ाएं'],
+  // The causative/perfective family is fully handled by
+  // repairTokenStructure, which applies these before any lookup. They are kept
+  // here as well so a token that reaches this stage already normalised is still
+  // correct, and so the function is usable on its own.
+  [new RegExp(AA + E + O + ANUS + '$'), AA + E + ANUS],
+  [new RegExp(AA + O + ANUS + '$'), AA + E + ANUS],
+  [new RegExp(AA + YA + E_MATRA + ANUS + '$'), AA + E + ANUS],
+  [new RegExp(AA + YA + E_MATRA + '$'), AA + E],
+  [new RegExp(AA + YA + O + '$'), AA + E + ANUS],
+  [new RegExp(AA + E + O + '$'), AA + E],
+  [new RegExp(AA + O + '$'), AA + E],
   // Long i: -ीएं is never right, -ीए is the feminine form.
-  [/ीएं$/, 'ीए'],
-  [/ँए$/, 'ें'],
+  [new RegExp(II + E + ANUS + '$'), II + E],
   // Typographic duplicates.
   [/(.)\1$/, '$1'],
 ];

@@ -128,6 +128,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
     setDomSelection(node, len, len);
   }, [isSelected]);
 
+  // Keep the latest publishSelection reachable from the focus handler without
+  // re-creating the callback on every render.
+  const publishSelectionRef = useRef<() => void>(() => {});
+
   useEffect(() => () => clearActiveTextSelection(element.id), [element.id]);
 
   // ---- selection plumbing -------------------------------------------------
@@ -160,6 +164,29 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
       formatRef.current
     );
   }, [element, readSelectionRange]);
+
+  useEffect(() => {
+    publishSelectionRef.current = publishSelection;
+  }, [publishSelection]);
+
+  // Clicking back into a box that is still selected but has lost focus (a stray
+  // click outside, a tab switch, a toolbar click that slipped through) must
+  // restore the caret. Without this the box keeps its selection outline and the
+  // Move handle but cannot be typed into, and the only way out is to delete the
+  // element and recreate it.
+  const handleRefocus = useCallback(() => {
+    const node = nodeRef.current;
+    if (!node || document.activeElement === node) return;
+    node.focus({ preventScroll: true });
+    // The browser places the caret from the mousedown offset, so it is left
+    // alone. Only force a position when the selection ended up outside this box.
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !node.contains(sel.anchorNode)) {
+      const len = node.textContent?.length || 0;
+      setDomSelection(node, len, len);
+    }
+    publishSelectionRef.current();
+  }, []);
 
   // ---- DOM -> model -------------------------------------------------------
   const commitFromDom = useCallback(() => {
@@ -315,11 +342,16 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         onKeyDown={handleKeyDown}
         onKeyUp={publishSelection}
         onMouseUp={publishSelection}
+        onMouseDown={handleRefocus}
         onFocus={() => {
           onFocusSelect(element.id);
           publishSelection();
         }}
         onBlur={(e) => {
+          // Losing focus must clear the flag, otherwise a box that is still
+          // selected can never be re-focused by the effect above and the only
+          // way out is to delete the element and recreate it.
+          hasFocused.current = false;
           if (!e.currentTarget.textContent?.trim()) onEmptyBlur(element.id);
           clearActiveTextSelection(element.id);
         }}
