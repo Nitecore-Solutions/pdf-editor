@@ -163,21 +163,37 @@ export function repairTokenStructure(token: string): string {
   let chars = [...token];
   if (chars.length === 0) return token;
 
-  // A token made only of marks carries no meaning.
+  // A token made only of marks carries no meaning. It is dropped rather than
+  // returned empty-string, because an empty result would blank the word
+  // position in the line and merge two neighbours together. pdf.js emits these
+  // as pure noise from some fonts ("ो़ों" on its own, three times in sample3).
   if (chars.every((c) => isMark(c))) return '';
 
   const out: string[] = [];
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i];
     const prev = out[out.length - 1];
-    const prevMark =
-      prev && isNukta(prev) ? out[out.length - 2] : prev;
+    const prevMark = prev && isNukta(prev) ? out[out.length - 2] : prev;
+
+    // A nukta belongs to a consonant and must follow one directly. These fonts
+    // routinely leave it stranded after a matra, which is why बनाएं, उठाएं and
+    // बताएं all arrive with a stray nukta.
+    if (isNukta(ch) && prevMark && isMatra(prevMark)) {
+      continue;
+    }
 
     if (prevMark && isMatra(prevMark) && isMatra(ch)) {
       // A pre-base matra is only ever valid as the first mark of a cluster.
       if (isPreBaseMatra(ch) && !isPreBaseMatra(prevMark)) continue;
       if (ch === prevMark) continue;
+      // The same vowel sign twice in a row is a doubled sign, wherever it
+      // occurs. These fonts emit the second one separated by a stray nukta, so
+      // the comparison is made against the mark before the nukta. "औरो़ों" is
+      // "और" plus a duplicated ो; "चीजो़ों" is "चीज़ें" mangled the same way.
+      if (ch === prevMark) continue;
     }
+
+    // (the doubled-vowel-sign case is handled in the block above)
     if (isNukta(ch) && prev && isVirama(prev)) {
       // nukta after virama is meaningless; keep it, it may be legitimate in
       // rare ligature spellings.
@@ -226,11 +242,16 @@ export function repairTokenStructure(token: string): string {
   if (joined.length > 3) {
     return joined
       // The locative -ाओं is a different word family from the participle and
-      // must be handled first, or the participle rules below turn जहाों into
-      // जहाएं. Standard is -ां: जहां, वहां, यहां. Built from code points for the
-      // same reason as everything else here.
+      // must be handled first, or the participle rules turn जहाों into जहाएं.
+      // Standard is -ां: जहां, वहां, यहां. Both the matra (U+094B) and the
+      // independent vowel (U+0913) are accepted, because these fonts emit
+      // either depending on the subset.
       .replace(
-        new RegExp('(जह|वह|यह|कह|कुछ|कौन)' + AA + O + ANUS, 'g'),
+        new RegExp('(जह|वह|यह|कह|कुछ|कौन)' + AA + '[\\u094B\\u0913]' + ANUS, 'g'),
+        '$1' + AA + ANUS
+      )
+      .replace(
+        new RegExp('(जह|वह|यह|कह|कुछ|कौन)[\\u094B\\u0913]' + ANUS, 'g'),
         '$1' + AA + ANUS
       )
       // ाए + ो + ं  ->  ाए + ं      (doubled vowel sign: बढाएों -> बढाएं)
@@ -344,6 +365,9 @@ const LEXICON = new Set<string>([
   'बिजली', 'खिड़की', 'खिड़कियाँ', 'मासिक', 'तैयार', 'हिस्सा', 'हिसाब',
   'खर्च', 'खर्चा', 'खर्चे', 'खर्चों', 'बचत', 'बचतें', 'आय', 'खर्च',
   'ज़रूरत', 'जरूरत', 'ज़रूरतें', 'रखना', 'रखने', 'रखा', 'दिखाना',
+  // Doubled-vowel-sign forms seen in sample3. Once the duplicate is removed
+  // these reduce to the plain word, which the matcher can then reach.
+  'औरों', 'चीजों', 'औरोँ', 'चीज़ें', 'चीजें', 'औरं',
   'दिखाएं', 'दिखाए', 'दिखाया', 'चुकी', 'चुके', 'चुका', 'रही', 'रहा', 'रहे',
   'सकता', 'सकते', 'सकती', 'भीमा', 'सीमा', 'प्रीमियम', 'खेल', 'खेलना',
   // Words that sit one matra away from a common function word. These must be
@@ -370,6 +394,26 @@ const LEXICON = new Set<string>([
 ]);
 
 /**
+ * Verb stems, checked before the suffix strip.
+ *
+ * Hindi verbs inflect heavily, and a stem list is what stops the fuzzy matcher
+ * from "correcting" correct words. Without it "रखें" was unknown, so the
+ * matcher deleted its matra and produced "रकें"; "रहें" became "हरें"; "हकसके"
+ * became "केसके". Those are not repairs, they are vandalism, and they only
+ * surfaced on real documents - never on a test list written from the same
+ * assumptions as the code that reads them.
+ */
+const VERB_STEMS = new Set<string>([
+  'रख', 'रह', 'कर', 'हो', 'जा', 'आ', 'दे', 'ले', 'देख', 'बन', 'कह', 'बत',
+  'सीख', 'समझ', 'लिख', 'पढ़', 'चाह', 'निकल', 'चल', 'लग', 'मिल', 'ठीक',
+  'शुरू', 'खत', 'कम', 'बढ़', 'घट', 'बदल', 'जोड़', 'हट', 'रोक', 'भेज',
+  'लौट', 'आत', 'उठ', 'बैठ', 'सो', 'जाग', 'सुन', 'होत', 'आन', 'देन',
+  'मान', 'पान', 'खोज', 'इस्तेमाल', 'तैयार', 'जुड़', 'लग', 'कट', 'गुजर',
+  'चल', 'टिक', 'रुक', 'आ', 'जान', 'पढ़', 'सुन', 'देख', 'सीख', 'भूल',
+  'चुन', 'गिन', 'जोड़', 'घट', 'बढ़', 'खा', 'पी', 'साँ', 'साफ', 'धो',
+]);
+
+/**
  * Suffixes stripped before looking a word up.
  *
  * These are whole words or bound morphemes, not matras. Stripping bare matras
@@ -383,12 +427,51 @@ const STRIPPABLE = [
   'एं', 'ें', 'ओं', 'ाए', 'ाएं',
 ];
 
-/** Is this token a known word, or a known word plus an inflectional suffix? */
+/**
+ * Does `repaired` drop anything from `original` that it had no business
+ * dropping?
+ *
+ * A consonant vanishing is the clearest false-positive signature, but matras
+ * matter too: "रखे" was being reduced to the bare stem "रख" because the stem
+ * is in the lexicon, and a consonant-only check cannot see that the vowel sign
+ * was deleted. Losing a matra is legitimate in exactly one case - a *spurious*
+ * pre-base matra that a structural rule has already removed - so the guard
+ * simply refuses any shortening, and lets the structural pass handle matra
+ * removal before this is ever consulted.
+ */
+function losesCharacters(original: string, repaired: string): boolean {
+  const consonantsOf = (s: string) =>
+    [...s].filter((ch) => isConsonant(ch)).sort().join('');
+
+  const before = consonantsOf(original);
+  const after = consonantsOf(repaired);
+  if (!before) return false;
+
+  // A consonant disappeared. Substituting one for another is legitimate: the
+  // corruption routinely turns a matra into a bare consonant, so the repair
+  // trades one for the other (ललए -> लिए is ल + ल -> ल + ि, which drops one
+  // consonant while adding a matra). What is forbidden is a consonant the
+  // result does not have at all, so this compares the *sets* rather than the
+  // counts.
+  for (const ch of before) {
+    if (!after.includes(ch)) return true;
+  }
+
+  // Losing a matra is forbidden, gaining one is not - putting back a missing
+  // ि is the single most common repair there is.
+  if ([...repaired].length < [...original].length) return true;
+
+  return false;
+}
+
+/** Is this token a known word, an inflected form, or a known stem plus ending? */
 export function isKnownWord(token: string): boolean {
   if (LEXICON.has(token)) return true;
+  if (VERB_STEMS.has(token)) return true;
   for (const s of STRIPPABLE) {
     if (token.length > s.length + 1 && token.endsWith(s)) {
-      if (LEXICON.has(token.slice(0, -s.length))) return true;
+      const stem = token.slice(0, -s.length);
+      if (LEXICON.has(stem) || VERB_STEMS.has(stem)) return true;
     }
   }
   return false;
@@ -689,6 +772,16 @@ export function repairTokenLexical(token: string): string {
   const maxDistance = token.length > 8 ? 1 : structurallyBroken ? 3 : 2;
   if (best.distance > maxDistance) return token;
 
+  // Never *lose* a character when repairing a structurally legal token.
+  //
+  // Every false positive seen on real documents was of this shape: the matcher
+  // deleted a matra or a consonant to reach a lexicon entry. हकसके is five code
+  // points and केसके is also five - one ह became के - so comparing lengths was
+  // not enough. The only reliable test is that the repair is not allowed to be
+  // shorter *or* to have lost a character, so the original's consonant skeleton
+  // has to survive.
+  if (!structurallyBroken && losesCharacters(token, best.word)) return token;
+
   // Finally, standardise the suffix. Only when the result is still legal and
   // does not turn a known word into an unknown one.
   const standardised = normalizeSuffix(best.word);
@@ -779,12 +872,24 @@ export function repairHindiLine(text: string): { text: string; changes: number }
     // Dropping a stray consonant is a real improvement (खर्चच -> खर्च), but a
     // token reduced to a single letter is data loss, not a repair, and "क" is
     // not a word. This is the line between correcting text and mangling it.
-    if ([...final].length < 2) final = core;
+    if (final && [...final].length < 2) final = core;
+
+    // A token that was only combining marks is noise with no recoverable
+    // content. It is removed along with its trailing space rather than left
+    // behind as a stray "ो़ों" in the output.
+    if (final === '') return '';
 
     if (final !== core) changes++;
     return prefix + final + suffix;
   });
 
-  const joined = out.join('');
-  return { text: joined.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, ''), changes };
+  // Re-join and tidy. A token that collapsed to nothing takes its adjacent
+  // space with it, so a noise fragment does not leave a double space behind.
+  const joined = out
+    .filter((part, i) => part !== '' || (i === 0 || out[i - 1] === ''))
+    .join('');
+  return {
+    text: joined.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, ''),
+    changes,
+  };
 }
