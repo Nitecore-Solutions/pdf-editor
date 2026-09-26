@@ -7,9 +7,7 @@ import {
   PlusCircle, 
   ExternalLink,
   GripHorizontal,
-  Check,
-  Loader2,
-  WandSparkles
+  Check
 } from 'lucide-react';
 import { 
   PageInfo, 
@@ -32,8 +30,6 @@ import { pageLooksBroken, DEVANAGARI_FONT_STACK } from '../lib/devanagari';
 import { RichTextEditor } from './RichTextEditor';
 
 // Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
-const isDevanagariLine = (item: { str: string }) => /[\u0900-\u097F]/.test(item.str);
-
 function generateSmoothPathData(points: { x: number; y: number }[], width: number, height: number): string {
   if (!points || points.length === 0) return '';
   if (points.length === 1) {
@@ -121,7 +117,6 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   const [extractedTexts, setExtractedTexts] = useState<ExtractedTextItem[]>([]);
   const [hoveredTextId, setHoveredTextId] = useState<string | null>(null);
   const [editedOriginalIds, setEditedOriginalIds] = useState<Set<string>>(new Set());
-  const [repairingTextId, setRepairingTextId] = useState<string | null>(null);
 
   // Freehand drawing in-progress state
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[] | null>(null);
@@ -228,62 +223,29 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   // Filter elements on this page
   const pageElements = elements.filter((el) => el.pageIndex === pageInfo.pageIndex);
 
-  /**
-   * Re-read one line through the repair endpoint. Used for lines the structural
-   * checks cannot fix but the user can see are wrong. Failures leave the line
-   * untouched - repairing text must never be able to destroy it.
-   */
-  const handleRepairLine = async (item: ExtractedTextItem) => {
-    setRepairingTextId(item.id);
-    try {
-      const res = await fetch('/api/ocr', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lines: [item] }),
-        signal: AbortSignal.timeout(45_000),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const repaired = data?.lines?.[0]?.str;
-      // Ignore a response that came back empty or did not actually change
-      // anything meaningful.
-      if (typeof repaired !== 'string' || !repaired.trim()) return;
-      setExtractedTexts((prev) =>
-        prev.map((t) => (t.id === item.id ? { ...t, str: repaired } : t))
-      );
-    } catch {
-      // Leave the line as-is on any failure.
-    } finally {
-      setRepairingTextId(null);
-    }
-  };
-
   // Convert existing static PDF text to editable text (Bharat Job style)
   const handleConvertExistingText = (item: ExtractedTextItem) => {    const isDevanagari = /[\u0900-\u097F]/.test(item.str) || item.fontFamily?.includes('Devanagari');
     const hindiFont = DEVANAGARI_FONT_STACK;
 
     // 1. Whiteout element covering original static text completely
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
-    // Devanagari ascends well above the Latin cap height (the shirorekha and the
-    // े ै ो ौ matras) and descends below the baseline (ु ू ृ), and the overlay
-    // is rendered with extra leading. The whiteout therefore needs to be far
-    // more generous than the text box, or the top and bottom of the original
-    // line stay visible around the replacement.
-    const whiteoutPadY = isDevanagari ? 0.6 : 0.05;
-    const whiteoutPadH = isDevanagari ? 0.7 : 0.05;
-    // The text box only needs a small nudge; moving it a lot would drag the
-    // baseline away from the line it is meant to replace.
-    const textPadY = isDevanagari ? 0.12 : 0.05;
-    const textPadH = isDevanagari ? 0.35 : 0.05;
+    // These must stay small. The extracted box already spans the full matra
+    // range (pdfRenderer uses 1.30em of box height for Devanagari, from 0.98em
+    // above the baseline), and line spacing on these documents is only ~2.0% of
+    // page height against a 1.97% box - there is 0.03% of slack. Any padding
+    // added here makes an element taller than the gap to its neighbour, which
+    // is what makes consecutive lines overlap.
+    const yOffset = isDevanagari ? 0.15 : 0.05;
+    const hExtra = isDevanagari ? 0.1 : 0.05;
 
     const whiteout: WhiteoutElement = {
       id: whiteoutId,
       pageIndex: pageInfo.pageIndex,
       type: 'whiteout',
       x: Math.max(0, item.xPct - 0.15),
-      y: Math.max(0, item.yPct - whiteoutPadY),
+      y: Math.max(0, item.yPct - yOffset),
       width: Math.min(100 - item.xPct + 0.15, item.widthPct + (isDevanagari ? 2.0 : 0.8)),
-      height: Math.min(100 - item.yPct + whiteoutPadY, item.heightPct + whiteoutPadY + whiteoutPadH),
+      height: Math.min(100 - item.yPct + yOffset, item.heightPct + yOffset + hExtra),
       color: '#ffffff',
     };
 
@@ -306,9 +268,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       text: item.str,
       runs: runsAlign ? item.runs : undefined,
       x: item.xPct,
-      y: Math.max(0, item.yPct - textPadY),
+      y: Math.max(0, item.yPct - yOffset),
       width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
-      height: item.heightPct + textPadY + textPadH,
+      height: item.heightPct + yOffset + hExtra,
       fontSize: item.fontSize || 14,
       fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
       color: '#000000',
@@ -673,32 +635,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     borderRadius: '2px',
                   }}
                   title="Click to edit text directly"
-                >
-                  {/* On-demand repair for a single line. Legacy Hindi PDFs
-                      often have a font whose ToUnicode map is wrong in ways no
-                      structural rule can catch (a wrong base consonant), and a
-                      clean page is deliberately never sent to the model. This
-                      gives the user a way to fix one suspect line without
-                      risking the rest of the document. */}
-                  {isDevanagariLine(item) && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRepairLine(item);
-                      }}
-                      title="Re-read this line from the PDF model (fixes garbled Hindi)"
-                      className="absolute -top-6 right-0 flex items-center gap-1 bg-sky-600 text-white text-2xs font-semibold px-1.5 py-0.5 rounded shadow-xs cursor-pointer hover:bg-sky-700 disabled:opacity-60 whitespace-nowrap"
-                      disabled={repairingTextId === item.id}
-                    >
-                      {repairingTextId === item.id ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <WandSparkles className="w-3 h-3" />
-                      )}
-                      {repairingTextId === item.id ? 'Fixing' : 'Fix text'}
-                    </button>
-                  )}
-                </div>
+                />
               ))}
           </div>
         )}

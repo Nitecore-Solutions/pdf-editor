@@ -332,10 +332,14 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           textDecoration: base.isUnderline ? 'underline' : 'none',
           textAlign: element.align || 'left',
           fontFamily,
-          // Devanagari needs extra leading for the top matras (े ै ो ौ ं ः) and
-          // the bottom ones (ु ू ृ), otherwise ascenders and the shirorekha get
-          // clipped by the whiteout behind the text.
-          lineHeight: isDevanagari ? 1.45 : 1.2,
+          // Capped deliberately. On these documents the baseline-to-baseline
+          // spacing is only ~1.33em, so anything above that makes the rendered
+          // line taller than the gap to its neighbour and consecutive lines
+          // overlap. Devanagari glyphs occupy roughly 0.8em including the top
+          // matras (े ै ो ौ) and the bottom ones (ु ू ृ), so 1.3 still contains
+          // them comfortably - extra leading was never what the matras needed,
+          // letter-spacing was the actual problem.
+          lineHeight: isDevanagari ? 1.3 : 1.2,
           // Deliberately 'normal'. A previous version applied letterSpacing to
           // Devanagari, which inserts space between every codepoint pair -
           // including between a base consonant and its zero-width matra. That
@@ -343,15 +347,13 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           // Hindi look scattered. The font's own metrics are correct as-is.
           letterSpacing: 'normal',
           wordSpacing: 'normal',
-          // Keep the browser's shaper in charge of conjuncts and matra
-          // placement; do not let it re-order or synthesise spacing.
           fontKerning: 'normal',
           fontVariantLigatures: 'common-ligatures',
           whiteSpace: 'pre-wrap',
           overflowWrap: 'break-word',
           width: '100%',
           minWidth: '30px',
-          padding: isDevanagari ? '2px 1px' : '0 1px',
+          padding: '0 1px',
         }}
       />
     </>
