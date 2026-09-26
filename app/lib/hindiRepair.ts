@@ -64,10 +64,16 @@ export function isAnusvara(ch: string): boolean {
   return cp(ch) === 0x0902;
 }
 
-/** Pre-base matra, which is stored after its base in logical order. */
+/**
+ * Pre-base matra: stored after its base in logical order, drawn to its left.
+ *
+ * ि (U+093F) and ॅ ॆ े ै ॉ ॊ ो ौ (U+0945–U+094C). ॏ (U+094F) is post-base and
+ * is not one. An earlier version tested only U+093F and U+094F, so the rules
+ * below never recognised a े, a ो or a ौ as pre-base at all.
+ */
 export function isPreBaseMatra(ch: string): boolean {
   const c = cp(ch);
-  return c === 0x093f || c === 0x094f;
+  return c === 0x093f || (c >= 0x0945 && c <= 0x094c);
 }
 
 export function isDevanagariChar(ch: string): boolean {
@@ -148,8 +154,20 @@ export function findOrthographicProblems(token: string): string[] {
   if (chars[chars.length - 1] && isVirama(chars[chars.length - 1])) {
     problems.push('dangling-virama');
   }
-  if (chars[chars.length - 1] && isPreBaseMatra(chars[chars.length - 1])) {
-    problems.push('trailing-prebase-matra');
+  // A pre-base matra at the very end is *normal*: it is stored after the
+  // consonant it belongs to, so ति, कि, मि, दि, रि, लि, शांति all end this way.
+  // Treating it as a fault marked a large slice of the language as broken, and
+  // because `structurallyBroken` is what exempts a token from the known-word
+  // guard, it was quietly switching off the protection those words rely on -
+  // शांति was rewritten to शांत while sitting in the lexicon. It is only a
+  // fault when no consonant precedes it, which is the separated-matra artefact
+  // where a matra arrives as a token of its own.
+  const last = chars[chars.length - 1];
+  if (last && isPreBaseMatra(last)) {
+    const before = chars[chars.length - 2];
+    if (!before || (!isConsonant(before) && !isNukta(before))) {
+      problems.push('trailing-prebase-matra');
+    }
   }
 
   return problems;
@@ -408,6 +426,118 @@ const LEXICON = new Set<string>([
   'आदर्श', 'सफलता', 'विफलता', 'अवसर', 'चुनौती', 'कठिनाई', 'सरल', 'साधारण',
   'विशेष', 'सामान्य', 'मुख्य', 'प्रमुख', 'आवश्यक', 'जरूरी', 'पर्याप्त', 'कम',
   'उपलब्ध', 'उपस्थित', 'अनुपस्थित', 'स्वागत', 'धन्यवाद', 'नमस्ते', 'नमस्कार',
+
+  // Everyday vocabulary, added after auditing three real documents. Every entry
+  // here is a word the engine was actively damaging: being absent from the
+  // lexicon is what let the fuzzy matcher reach for a neighbour, and the
+  // substitutions it chose were not repairs. समाज became सीमा (society ->
+  // border), आसमान became आसान (sky -> easy), सवाल became साल (question ->
+  // year), हजार became जारी (thousand), नमक became मक (salt), बहस became बस.
+  // None of those originals showed a single structural or orthographic fault -
+  // they were simply missing, and a missing word is indistinguishable from a
+  // broken one unless the lexicon says otherwise.
+  //
+  // A word being listed here is what makes `isKnownWord` true, which returns
+  // early and leaves the token untouched. That is the whole mechanism.
+  //
+  // society, world, mind, time
+  'समाज', 'समाजिक', 'मन', 'मनोरंजन', 'मनोभाव', 'महत्व', 'महत्त्व', 'महत्वपूर्ण',
+  'आयु', 'समय', 'अवधि', 'अवधार', 'सीमा', 'अंतर', 'अंत', 'प्रारंभ', 'अंतिम',
+  // people, roles, relations
+  'आदमी', 'मनुष्य', 'महिला', 'बच्चा', 'बच्चे', 'बालक', 'बालिका', 'युवा', 'बुज़ुर्ग',
+  'दोस्त', 'साथी', 'पड़ोसी', 'मेहमान', 'ग्राहक', 'कर्मचारी', 'मालिक', 'निवासी',
+  'रिश्ता', 'रिश्ते', 'जिम्मेदार', 'जिम्मेदारी', 'वज़िम्मेदारी', 'सहायता', 'सहायक',
+  'ताकत', 'शक्ति', 'क्षमता', 'योग्यता', 'हुनर', 'प्रतिभा', 'रुचि', 'आवश्यकता',
+  // body, health, feeling
+  'सेहत', 'स्वास्थ्य', 'बीमारी', 'दर्द', 'आराम', 'नींद', 'थकान', 'कमजोरी',
+  'आँख', 'कान', 'नाक', 'मुँह', 'दाँत', 'बाल', 'चेहरा', 'पेट', 'हाथ', 'पैर',
+  // food and household
+  'नमक', 'चीनी', 'चाय', 'कॉफ़ी', 'दूध', 'दही', 'मक्खन', 'पनीर', 'मसाला', 'मसाले',
+  'आटा', 'तेल', 'गुड़', 'रोटी', 'रोटियाँ', 'दाल', 'चावल', 'सब्ज़ी', 'सब्जी',
+  'फल', 'फूल', 'मिठाई', 'कपड़ा', 'कपड़े', 'जूता', 'जूते', 'चादर', 'तकिया',
+  'बाल्टी', 'मछली', 'अंडा', 'मांस', 'शाकाहारी', 'सात्विक',
+  // nature and place
+  'पेड़', 'पत्ता', 'पत्तियाँ', 'नदी', 'नाला', 'तालाब', 'झील', 'पहाड़', 'पहाड़ी',
+  'जंगल', 'रेगिस्तान', 'आकाश', 'सूरज', 'चाँद', 'तारा', 'तारे', 'बादल', 'बर्फ़',
+  'बारिश', 'बरसात', 'मौसम', 'धूप', 'छत', 'दीवार', 'मंज़िल', 'आँगन', 'बगीचा',
+  'पड़ोस', 'मार्केट', 'बाज़ार', 'दुकान', 'ऑफ़िस', 'दफ़्तर', 'कंपनी', 'फ़ैक्ट्री',
+  'स्कूल', 'कॉलेज', 'विश्वविद्यालय', 'यूनिवर्सिटी', 'अस्पताल', 'पार्क', 'एयरपोर्ट',
+  'स्टेशन', 'पुलिस', 'थाना', 'कोर्ट', 'मंदिर', 'मस्जिद', 'गिरजा', 'श्मशान',
+  // time
+  'आज', 'कल', 'परसों', 'अभी', 'तुरंत', 'जल्दी', 'देर', 'सुबह', 'दोपहर', 'शाम',
+  'रात', 'रोज़', 'रोज़ाना', 'हर दिन', 'सप्ताह', 'सप्ताहिक', 'महीना', 'साल',
+  'घंटा', 'घंटे', 'मिनट', 'सेकंड', 'सदी', 'शताब्दी', 'दशक', 'सत्र', 'सेमेस्टर',
+  // money, work, business
+  'कीमत', 'मूल्य', 'मूल्यांकन', 'खर्च', 'आय', 'बचत', 'कर्ज़', 'कर्जा', 'ब्याज',
+  'बजट', 'खरीद', 'खरीदना', 'बिक्री', 'बेचना', 'मुनाफ़ा', 'नुक़सान', 'आमदनी',
+  'रोज़मर्रा', 'रोज़मरा', 'नौकरी', 'पेशा', 'व्यवसाय', 'व्यापार', 'व्यापारी',
+  'फ़ैसला', 'फैसला', 'सरोकार', 'कानून', 'अधिकार', 'ज़िम्मेदारी', 'शर्त', 'शर्तें',
+  // documents, study, work
+  'दस्तावेज़', 'दस्तावेज', 'फ़ाइल', 'फाइल', 'फ़ॉर्म', 'फॉर्म', 'आवेदन', 'रिज्यूमे',
+  'सीवी', 'प्रमाण', 'साक्ष्य', 'रिकॉर्ड', 'रिपोर्ट', 'नोट', 'नोट्स', 'पत्र', 'ईमेल',
+  'पढ़ाई', 'पठन', 'लेखन', 'कक्षा', 'टीचर', 'पाठ्यक्रम', 'डिग्री', 'कोर्स', 'प्रश्न',
+  'उत्तर', 'प्रश्नोत्तरी', 'अभ्यास', 'टेस्ट', 'परीक्षा', 'अंक', 'गणित', 'विज्ञान',
+  // abstract nouns that the matcher kept overwriting
+  'ताकत', 'बात', 'बातचीत', 'चर्चा', 'सलाह', 'सुझाव', 'मत', 'राय', 'फ़ैसला',
+  'उदाहरण', 'कारण', 'नतीजा', 'परिणाम', 'फ़ायदा', 'नुक़सान', 'मौका', 'योजना',
+  'लक्ष्य', 'उपाय', 'तरीका', 'तरीके', 'उपलब्धता', 'ज़रूरत', 'ज़रूरतें',
+  // common adjectives
+  'आसान', 'कठिन', 'मज़बूत', 'मजबूत', 'कमज़ोर', 'गरम', 'ठंडा', 'सुंदर', 'महँगा',
+  'सस्ता', 'मुफ़्त', 'खास', 'ज़रूरी', 'सही', 'गलत', 'साफ़', 'पक्का', 'अस्थायी',
+  'स्थायी', 'वास्तविक', 'सामान्य', 'निजी', 'सार्वजनिक', 'वैकल्पिक', 'उचित',
+  'लम्बा', 'लंबा', 'लंबे', 'चौड़ा', 'संकीर्ण', 'गहरा', 'ऊँचा', 'नीचा', 'दूर',
+  'पास', 'साफ़-सुथरा', 'व्यस्त', 'शांत', 'शांति', 'शान्ति', 'स्वस्थ', 'ख़ुश', 'दुखी', 'गुस्सा',
+  // adverbs and connectives
+  'बहुत', 'काफ़ी', 'काफी', 'लगभग', 'केवल', 'सिर्फ', 'फिर', 'तब', 'अब', 'जब',
+  'ताकि', 'इसलिए', 'इसलिये', 'हालांकि', 'जबकि', 'परंतु', 'फिर भी', 'इसके अलावा',
+  // Second pass. Auditing the changes the first pass left behind showed a
+  // pattern worth naming: the words that survived were not the rare ones, they
+  // were the everyday ones - numbers, body parts, common nouns - because those
+  // are the words a speaker reaches for most and the ones the old list had no
+  // reason to include. Every entry here was being rewritten to a neighbour.
+  'हजार', 'लाख', 'करोड़', 'सौ', 'दस', 'बीस', 'पचास', 'सौ', 'सत्तर', 'नब्बे',
+  'आसमान', 'जगह', 'जगहें', 'बहस', 'मदद', 'ताकत', 'सहायता', 'पालन', 'पालन',
+  'तथा', 'सवाल', 'सवालों', 'जवाब', 'जनता', 'लगातार', 'भरतारा', 'समान',
+  'उतनी', 'इतनी', 'जितनी', 'उतना', 'इतना', 'जितना', 'समझकर', 'रहकर',
+  'कराती', 'करते', 'करती', 'करना', 'करने', 'करें', 'करो', 'करेंगे',
+  'परेशानी', 'परेशान', 'सुख', 'दुख', 'रास्ता', 'राहत', 'सहारा',
+  'बात', 'बातें', 'बातचीत', 'चर्चा', 'सलाह', 'सुझाव', 'मत', 'राय', 'फ़ैसला',
+  'सीमा', 'सीमांत', 'अंतर', 'रिश्ता', 'रिश्ते', 'बंधन', 'जंजीर',
+  'दुनिया', 'देश', 'गांव', 'गाँव', 'शहर', 'कस्बा', 'मोहल्ला', 'इलाका',
+  'नदी', 'नदीन', 'रेगिस्तान', 'मिट्टी', 'रेत', 'पथरी', 'पहाड़', 'पहाड़ी',
+  'सूरज', 'चाँद', 'तारा', 'आकाश', 'गगन', 'धरती', 'पृथ्वी', 'जल', 'अग्नि',
+  'कानून', 'अधिनियम', 'संविधान', 'व्यवस्था', 'प्रणाली', 'तंत्र', 'संरचना',
+  'उत्पादन', 'उपभोग', 'आपूर्ति', 'मांग', 'बाज़ार', 'मूल्य', 'मानक',
+  'शैक्षणिक', 'व्यावसायिक', 'तकनीकी', 'आधुनिक', 'पारंपरिक', 'सामाजिक',
+  'आर्थिक', 'राजनीतिक', 'सांस्कृतिक', 'धार्मिक', 'व्यक्तिगत',
+  'अभ्यास', 'प्रशिक्षण', 'प्रशिक्षक', 'उपस्थिति', 'गैरहाज़िरी',
+  'अनुशासन', 'आदत', 'व्यवहार', 'चरित्र', 'स्वभाव', 'उद्देश्य', 'लक्ष्य',
+  'प्राथमिकता', 'आवश्यकता', 'संभावना', 'जोखिम', 'लाभ', 'हानि',
+  'उपयोगिता', 'प्रासंगिकता', 'विश्वसनीयता', 'गुणवत्ता',
+  'संग्रह', 'संचय', 'वितरण', 'भंडारण', 'विपणन', 'प्रचार',
+  // Third pass. The words the second pass left still being rewritten were the
+  // everyday verbs and the ordinals - the two groups a topical list forgets
+  // first, because neither is a "topic". दूसरे became दूरसे, बचना became बेचना
+  // (save -> sell), संग्रहीत became संग्रहती.
+  'दूसरे', 'दूसरा', 'दूसरी', 'तेज़', 'तेज', 'रूई', 'नींद', 'बचना', 'बचाए',
+  'बेचना', 'बेचें', 'खरीदना', 'खरीदें', 'संग्रहित', 'संग्रहीत', 'संचयित',
+  'रखना', 'रखें', 'रखेंगे', 'लगाना', 'लगातार', 'लगेगा', 'भेजना', 'बुलाना',
+  'सुनना', 'सुनें', 'देखना', 'देखें', 'पूछना', 'पूछें', 'ढूंढना', 'ढूंढें',
+  'खोजना', 'खोजें', 'खोजते', 'खेलना', 'खेलें', 'चुनना', 'चुनें', 'तय करना',
+  'सीखना', 'सिखाना', 'समझाना', 'बताना', 'बताएं', 'फैसला करना', 'रोकना',
+  'रोकें', 'शुरू करना', 'शुरू', 'रुकना', 'रुकें', 'जोड़ना', 'घटाना', 'बढ़ाना',
+  'कमाना', 'कमाए', 'बचाना', 'बचाएं', 'सफाई', 'धोना', 'सुविधा', 'तकलीफ',
+  'परेशानी', 'आरामदायक', 'सुविधाजनक', 'ज़रूरतमंद', 'उपयोगी', 'फ़ायदेमंद',
+  'प्रभावी', 'कुशल', 'चतुर', 'मेहनती', 'ईमानदार', 'वफ़ादार', 'ज़िम्मेदार',
+  // Adding an inflected form puts its base form at risk, because the matcher
+  // will happily stretch a correct word onto the longer one: मेहनत became
+  // मेहनती, समाप्त became समाप्ति. Both bases are listed so they are recognised
+  // and returned untouched. This is the standing cost of a larger lexicon, and
+  // it is why the audit is run over whole documents rather than a word list.
+  'मेहनत', 'मेहनती', 'समाप्त', 'समाप्ति', 'शुरुआत', 'शुरुआती',
+  // The same trap, caught by the audit on sample1 and sample3: adding "बेचना"
+  // put "बेचें" one matra away from "बचें" (save), and the matcher reached for it.
+  'बचें', 'बचे', 'बची', 'बचता', 'बचती', 'बचते',
 ]);
 
 /**
@@ -490,6 +620,20 @@ function losesCharacters(original: string, repaired: string): boolean {
     // A single extra occurrence may be dropped, but only if the original really
     // had it adjacent, which is what identifies a duplicated glyph.
     if (n >= 2 && !hasAdjacentDuplicate(original, ch)) return true;
+    // Losing a character outright needs the same justification. Without this,
+    // any correct word that happened to be one character short of a lexicon
+    // entry was silently shortened - and all of these were observed doing it on
+    // a real document, with no fault of their own to show for it:
+    //
+    //   सवाल -> साल     (question -> year)     नमक -> मक      (salt)
+    //   बहस -> बस      (debate -> but)        तथा -> था      (and -> was)
+    //   समाज -> सीमा    (society -> border)     पालन -> पान    (upbringing)
+    //   आसमान -> आसान  (sky -> easy)           अंतर -> अंत    (difference)
+    //   जगह -> गही     (place)                 लगातार -> लगाता
+    //
+    // A duplicated glyph is the one case where a character legitimately
+    // disappears, and the check above already covers exactly that.
+    if (kept === 0) return true;
   }
 
   // Losing characters is forbidden, with one exception: dropping a duplicated
@@ -686,6 +830,12 @@ const PROTECTED = new Set<string>([
   'बाद', 'पहले', 'ऊपर', 'नीचे', 'अब', 'तब', 'वाले', 'वाली', 'वाला',
   'वालों', 'देश', 'राज्य', 'शहर', 'गांव', 'गाँव', 'जिला', 'नाम', 'पता',
   'समय', 'पैसा', 'पैसे', 'काम', 'नौकरी', 'परीक्षा', 'अंक', 'फॉर्म',
+  // Short words one matra away from a lexicon feminine form. "किन" is two
+  // characters from "किनी" and was being rewritten to it, which is exactly the
+  // silent damage this list exists to prevent - the user cannot tell that
+  // anything happened. "जरूर" is a complete word in its own right and was being
+  // stretched to "जरूरी" by the same mechanism.
+  'किन', 'जरूर', 'कुछ', 'यहाँ',
   'सरकार', 'सरकारी', 'कार्यालय', 'व्यक्ति', 'जानकारी', 'समस्या', 'सेवा',
   'विकास', 'सुरक्षा', 'शिक्षा', 'स्वास्थ्य', 'व्यापार', 'उद्योग', 'कानून',
   'अमेरिका', 'भारत', 'हिन्दी', 'हिंदी', 'अंग्रेज़ी', 'अंग्रेजी',
@@ -693,6 +843,101 @@ const PROTECTED = new Set<string>([
 
 /** Words the lexicon would like to snap to, which must not be accepted. */
 const VETOED = new Set<string>(['ही', 'की', 'के', 'का', 'को', 'से', 'बड़ा', 'गलत', 'दी', 'दे', 'ले', 'रही', 'रहे', 'यही', 'वही', 'कभी']);
+
+/**
+ * Single-glyph misreadings, keyed by the form the PDF's ToUnicode table
+ * produces instead of the word that was drawn.
+ *
+ * These are not structural faults. Every entry is a legal Devanagari syllable, so
+ * no amount of orthographic checking can tell that it is wrong - nothing in the
+ * codepoints says "हकन" was set as "किन". The only evidence is that one side is
+ * a Hindi word and the other is not, and that is what this table encodes.
+ *
+ * The source documents substitute ह for क at the start of a syllable (किन,
+ * किसके, किया, हिसाब all arrive with a leading ह), and they turn a final ल into
+ * a matra (इस्तेमाल arrives as इस्तेमाि). Both are per-subset ToUnicode faults
+ * and neither is derivable, so they are listed rather than inferred.
+ *
+ * Every key MUST be a form that is not a Hindi word. A misreading that collides
+ * with a real word cannot be corrected this way, because the correction would
+ * damage correct text; those are handled by PHRASE_FIXES, which can see the
+ * neighbouring words.
+ */
+const MISREADINGS: Record<string, string> = {
+  हकन: 'किन', // "समय किन चीजों का ध्यान रखें"
+  हकसके: 'किसके', // "1099 Form किसके लिए होता है"
+  हकसी: 'किसी', // "Bank Details किसी Unknown Person को Share न करें"
+  हकया: 'किया', // "Credit Check क्यों किया जाता है"
+  हहसाब: 'हिसाब', // "हर Website का हिसाब"
+  पहिे: 'पहले', // "सबसे पहले Bank Account Open करें"
+  इस्तेमाि: 'इस्तेमाल', // "Apps का इस्तेमाल"
+  खचच: 'खर्च', // "खाने का खर्च कैसे कम करें"
+  ललए: 'लिए', // "रहने वालों के लिए"
+  // sample6 substitutes व or ह for a leading क or हि, and swaps ो/ी for य.
+  // The no-character-loss guard now refuses all of these - correctly, since on
+  // its own it cannot tell a dropped व from a real repair - so the readings are
+  // pinned here instead. Each was confirmed from the sentence it appears in.
+  वकया: 'किया', // "Credit Check क्यों किया जाता है"
+  वशक्षा: 'शिक्षा', // "शिक्षा का महत्व"
+  वशक्षक: 'शिक्षक', // "शिक्षक की भूमिका"
+  वहस्सा: 'हिस्सा', // "हिस्सा पूछें"
+  वहंदी: 'हिंदी', // "हिंदी में"
+  वपता: 'पता', // "पता चलेगा"
+  कयई: 'कोई', // "कोई भी"
+  दुवनया: 'दुनिया', // "दुनिया में"
+  खयजना: 'खोजना', // "नौकरी खोजना"
+  खयजने: 'खोजने', // "नौकरी खोजने"
+  खयजते: 'खोजते', // "नौकरी खोजते"
+  खयजें: 'खोजें', // "कैसे खोजें"
+  खयलना: 'खेलना', // "खेलना"
+  खयलने: 'खेलने', // "खेलने"
+  खयलें: 'खेलें', // "खेलें"
+  रयटी: 'रोटी', // "रोटी"
+  दयपहर: 'दोपहर', // "दोपहर"
+  ययजना: 'योजना', // "योजना"
+  पारंपररक: 'पारंपरिक', // "पारंपरिक"
+  दूसरे: 'दूसरे',
+  हयता: 'हीता',
+  हयती: 'हीती',
+  हयते: 'हीते',
+  हयना: 'हीना',
+  हयने: 'हीने',
+  गमय: 'गया',
+  दस्तािेज: 'दस्तावेज़',
+  संभािना: 'संभावना',
+};
+
+/**
+ * The corrected spellings are protected from the fuzzy matcher as well.
+ *
+ * This is not belt-and-braces. pdfRenderer applies the table per piece, so by
+ * the time repairHindiLine runs, "हकसके" has already become "किसके" - a token
+ * that is no longer in the table and looks like any other unknown word. The
+ * matcher duly improved it to "किके", dropping the स. Anything the table
+ * produces is curated, so it is off limits to the guesser.
+ */
+for (const corrected of Object.values(MISREADINGS)) PROTECTED.add(corrected);
+
+/**
+ * Corrections that need the neighbouring words to be safe.
+ *
+ * "हिए" is a real Hindi word - a plural-honorific form of "है", as in "ये लोग
+ * हिए" - so rewriting it to "लिए" on its own would damage correct text. But a
+ * postposition followed by "हिए" is not a phrase anyone writes: "के लिए",
+ * "किसके लिए", "इसके लिए" all want "लिए". Sample3 draws "के लिए" and the
+ * ToUnicode table returns "के हिए", which is how the word the user reported as
+ * turning into "हिए" actually arose.
+ *
+ * The postposition is matched in its attached forms too, since the documents
+ * write "किसके लिए" as often as "के लिए". Applied to the joined line rather than
+ * to single tokens, which is the whole point: the same word is left alone when
+ * nothing supports the change.
+ */
+const PHRASE_FIXES: Array<[RegExp, string]> = [
+  // "के हिए" / "किसके हिए" / "इसके हिए" -> the same with "लिए".
+  [/(^|\s)(\S*के)(\s+)हिए(?=\s|$)/g, '$1$2$3लिए'],
+  [/(^|\s)(\S*के)(\s+)हिये(?=\s|$)/g, '$1$2$3लिये'],
+];
 
 /**
  * Words that must never be *reached* either, because dropping a single
@@ -772,6 +1017,18 @@ function editDistance(a: string, b: string): number {
  */
 export function repairTokenLexical(token: string): string {
   if (!token || !isDevanagariToken(token)) return token;
+
+  // A curated misreading wins outright, at every entry point.
+  //
+  // These are verified readings of one specific font's damage, and the guards
+  // below exist to *stop* the engine rewriting tokens it has no evidence about.
+  // Pointing one of those guards at a table entry has the guard working against
+  // the only thing that actually knows the answer: रलए and हलए are near लिए only
+  // in the sense that both of them are wrong, and no amount of character
+  // accounting can say which one the page meant.
+  const misread = applyMisreadings(token);
+  if (misread !== token) return misread;
+
   // A one-character token is almost always the result of over-trimming, and
   // has no reliable correction. Leaving it alone is safer than guessing.
   if (token.length < 3) return token;
@@ -899,6 +1156,36 @@ export function extractHindiWords(text: string): string[] {
  * orthographic/legal corrections, then lexicon snapping, then suffix
  * normalisation.
  */
+/**
+ * The "spurious consonant in front of लिए" family.
+ *
+ * Every document in this set writes लिए with one extra consonant ahead of it, and
+ * which consonant varies by subset: ललए, वलए, रलए, हलए. No two of those are two
+ * characters from each other, so the fuzzy matcher cannot relate them and an
+ * exact-match table would need a fresh entry per document.
+ *
+ * `<consonant> ल ए` is not a Hindi word and लिए is, so the substitution rests on
+ * the same evidence the table's entries do.
+ */
+const LIYE_WITH_PREFIX = /^[क-ह]लए$/;
+
+/**
+ * Apply the known single-glyph misreadings to a token.
+ *
+ * Exported because the ordering matters. The structural tier drops a pre-base
+ * matra that follows another matra, which is right in general but destroys
+ * "इस्तेमाि" - the trailing ि there is not a stray mark, it is a mis-mapped ल.
+ * Since pdfRenderer runs the structural pass per styled piece *before* the line
+ * ever reaches repairHindiLine, the table has to be consulted there too, or the
+ * consonant it needs to restore is already gone by the time the line is read.
+ */
+export function applyMisreadings(token: string): string {
+  const exact = MISREADINGS[token];
+  if (exact) return exact;
+  if (LIYE_WITH_PREFIX.test(token)) return 'लिए';
+  return token;
+}
+
 export function repairHindiLine(text: string): { text: string; changes: number } {
   if (!text || !/[\u0900-\u097F]/.test(text)) return { text, changes: 0 };
 
@@ -909,12 +1196,32 @@ export function repairHindiLine(text: string): { text: string; changes: number }
     const { prefix, core, suffix } = splitToken(part);
     if (!core || !/[\u0900-\u097F]/.test(core)) return part;
 
+    // 0. known single-glyph misreadings.
+    //
+    // This has to run *before* the structural tier. "इस्तेमाि" is repaired
+    // structurally by dropping the trailing matra, which yields "इस्तेमा" -
+    // after which the intended "इस्तेमाल" is no longer reachable, because the
+    // matra that needed to become a ल is already gone. Reading the table first
+    // keeps the consonant the font actually drew.
+    //
+    // A hit is taken verbatim and skips every later stage. The table is curated
+    // ground truth, and the fuzzy matcher would otherwise try to improve it:
+    // "किसके" is four characters from "किके", one edit away, and lost the स
+    // doing it. Letting a guess overrule the table reintroduces exactly the kind
+    // of silent damage this module exists to prevent.
+    const misread = applyMisreadings(core);
+    if (misread !== core) {
+      changes++;
+      return prefix + misread + suffix;
+    }
+    const read = core;
+
     // 1. structural
-    const structured = repairTokenStructure(core);
-    if (structured !== core) changes++;
+    const structured = repairTokenStructure(read);
+    if (structured !== read) changes++;
 
     // 2. + 3. orthography and lexicon
-    const lexed = repairTokenLexical(structured || core);
+    const lexed = repairTokenLexical(structured || read);
 
     // 4. suffix normalisation, only when the result is still legal
     let final = lexed;
@@ -927,7 +1234,7 @@ export function repairHindiLine(text: string): { text: string; changes: number }
     // Dropping a stray consonant is a real improvement (खर्चच -> खर्च), but a
     // token reduced to a single letter is data loss, not a repair, and "क" is
     // not a word. This is the line between correcting text and mangling it.
-    if (final && [...final].length < 2) final = core;
+    if (final && [...final].length < 2) final = read;
 
     // A token that was only combining marks is noise with no recoverable
     // content. Whitespace is never treated as noise, since it is the only
@@ -960,5 +1267,23 @@ export function repairHindiLine(text: string): { text: string; changes: number }
     }
     dropped = false;
   }
-  return { text: kept.join(''), changes };
+  const tidied = kept.join('');
+
+  // Context-sensitive corrections, applied last, to the tidied line.
+  //
+  // These are the repairs a token cannot make on its own. "हिए" is a real
+  // Hindi word, so nothing about the token itself says it is wrong; only the
+  // postposition in front of it reveals that the document drew "लिए". Applying
+  // this per token would rewrite "ये लोग हिए" as well, so it has to see the
+  // whole line.
+  let result = tidied;
+  for (const [pattern, replacement] of PHRASE_FIXES) {
+    const next = result.replace(pattern, replacement);
+    if (next !== result) {
+      changes++;
+      result = next;
+    }
+  }
+
+  return { text: result, changes };
 }

@@ -1,6 +1,7 @@
 import { PDFDocument, rgb, degrees, StandardFonts, PDFFont } from 'pdf-lib';
 import { EditorElement, PageInfo, DrawingElement, TextRun } from '../types/editor';
 import { getRuns, runsToText, splitRunsIntoLines, normalizeHexColor } from './richText';
+import { resolveFontStack } from './devanagari';
 
 // Helper to convert hex color string (#RRGGBB) to pdf-lib rgb(r, g, b)
 function hexToRgb(hex: string) {
@@ -30,7 +31,8 @@ function renderTextToCanvasPng(
   fontSizePt: number,
   fontFamily: string,
   boxWidthPt: number,
-  align: string = 'left'
+  align: string = 'left',
+  firstBaselinePt: number = Number.NaN
 ): Uint8Array | null {
   try {
     const scale = 3; // 3x crisp supersampling
@@ -62,13 +64,32 @@ function renderTextToCanvasPng(
 
     const w = Math.max(Math.round(boxWidthPt * scale), Math.round(maxLineWidth) + 20);
     const lineHeightPx = fontSizePt * 1.25 * scale;
-    const topPadding = fontSizePt * 0.35 * scale; // headroom for Devanagari top matras
-    const h = Math.round(Math.max(fontSizePt * scale, lines.length * lineHeightPx) + topPadding);
+
+    // The canvas is aligned to the top of the element box and the text is drawn
+    // on an alphabetic baseline, so the caller's baseline lands in the same
+    // place here as it does in the editor. Previously the text was drawn from
+    // the text *top* with a flat 0.35em pad and the image was then nudged by a
+    // 0.35/1.35 fudge on the way out, which put rasterised Hindi on a slightly
+    // different baseline from the vector text beside it.
+    //
+    // Without a caller-supplied baseline (a hand-drawn box) the old padding is
+    // kept, so nothing regresses for text that has no original to match.
+    const useBaseline = Number.isFinite(firstBaselinePt);
+    const topPadding = useBaseline
+      ? 0
+      : fontSizePt * 0.35 * scale; // headroom for Devanagari top matras
+    // Enough room above the first baseline for the tallest ascent, and below for
+    // the matras that hang under the baseline.
+    const aboveBaseline = useBaseline ? fontSizePt * scale * 1.2 : 0;
+    const h = Math.round(
+      Math.max(fontSizePt * scale, topPadding + aboveBaseline + (lines.length - 1) * lineHeightPx) +
+        (useBaseline ? fontSizePt * scale * 0.45 : 0)
+    );
 
     canvas.width = w;
     canvas.height = h;
 
-    ctx.textBaseline = 'top';
+    ctx.textBaseline = useBaseline ? 'alphabetic' : 'top';
 
     lines.forEach((lineRuns, idx) => {
       const lineW = measure(lineRuns);
@@ -76,14 +97,20 @@ function renderTextToCanvasPng(
       if (align === 'center') x = (w - lineW) / 2;
       else if (align === 'right') x = w - lineW;
 
+      const y = useBaseline
+        ? aboveBaseline + idx * lineHeightPx
+        : topPadding + idx * lineHeightPx;
+
       for (const r of lineRuns) {
         if (!r.text) continue;
         ctx.font = fontFor(r);
         ctx.fillStyle = r.color || '#000000';
-        ctx.fillText(r.text, x, topPadding + idx * lineHeightPx);
+        ctx.fillText(r.text, x, y);
         if (r.isUnderline) {
           const prev = ctx.fillStyle;
-          ctx.fillRect(x, topPadding + idx * lineHeightPx + fontSizePt * scale * 1.05,
+          // Measured from the baseline, not the text top, so it sits the same
+          // way whichever baseline mode is in use.
+          ctx.fillRect(x, y + fontSizePt * scale * 0.12,
             ctx.measureText(r.text).width, Math.max(1, Math.round(fontSizePt * scale * 0.06)));
           ctx.fillStyle = prev;
         }
@@ -241,6 +268,15 @@ export async function exportModifiedPdf({
         const lineRunsList = splitRunsIntoLines(runs);
         const baseColor = normalizeHexColor(el.color);
 
+        // Distance from the top of the element box down to the first baseline,
+        // in points. A line that came from the document carries the baseline the
+        // PDF drew, so the export lands on the same line as the editor; a
+        // hand-drawn box has none and keeps the old 0.85em guess.
+        const firstBaselinePt =
+          el.baselinePct != null
+            ? ((el.baselinePct - el.y) / 100) * pageHeight
+            : 0.85 * lineHeight;
+
         const pickFont = (isBold: boolean, isItalic: boolean): PDFFont => {
           // Times/Courier only have the regular face embedded (matching the
           // previous behaviour); the Helvetica family covers all four styles.
@@ -267,7 +303,8 @@ export async function exportModifiedPdf({
           lineRunsList.forEach((lineRuns, lineIndex) => {
             const lineText = runsToText(lineRuns);
             if (!lineText.trim() && lineRunsList.length === 1) return;
-            const lineY = pageHeight - (el.y / 100) * pageHeight - (lineIndex + 0.85) * lineHeight;
+            const lineY =
+              pageHeight - (el.y / 100) * pageHeight - firstBaselinePt - lineIndex * lineHeight;
 
             const lineWidth = lineRuns.reduce((sum, r) => {
               if (!r.text) return sum;
@@ -317,16 +354,25 @@ export async function exportModifiedPdf({
             const pngBytes = renderTextToCanvasPng(
               runs,
               fontSizePt,
-              el.fontFamily || 'Arial, sans-serif',
+              // Same resolution the editor used on screen, so a Hindi line does
+              // not come back as Nirmala UI in the export after being rendered
+              // in the PDF's own Latin family in the app.
+              resolveFontStack(el.fontFamily, el.text),
               elWidth,
-              el.align || 'left'
+              el.align || 'left',
+              firstBaselinePt
             );
             if (pngBytes) {
               const embedded = await outputDoc.embedPng(pngBytes);
               const { width: imgW, height: imgH } = embedded.scale(1 / 3);
+              // The PNG's top edge is the top of the element box, so it is placed
+              // there directly. The old code added `imgH * 0.35 / 1.35` to
+              // compensate for drawing the text from its top inside the canvas;
+              // the text is now drawn on its baseline, so that nudge is gone and
+              // rasterised text lines up with the vector text.
               pdfPage.drawImage(embedded, {
                 x: elX,
-                y: pageHeight - (el.y / 100) * pageHeight - imgH + (imgH * 0.35 / 1.35),
+                y: pageHeight - (el.y / 100) * pageHeight - imgH,
                 width: imgW,
                 height: imgH,
               });

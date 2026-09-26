@@ -25,6 +25,30 @@
 export const DEVANAGARI_RANGE = /[\u0900-\u097F]/;
 
 /**
+ * A Latin letter or digit: ASCII, Latin-1 Supplement letters, Latin Extended-A/B.
+ *
+ * Deliberately excludes General Punctuation, so a lone em dash or curly quote
+ * does not count, and excludes every symbol block - which is what keeps an
+ * emoji run from being mistaken for Latin text (see isLatinBearing).
+ */
+const LATIN_LETTER_OR_DIGIT = /[A-Za-z0-9\u00C0-\u024F\u1E00-\u1EFF]/;
+
+/**
+ * Whether `text` contains anything a Latin text face would actually draw.
+ *
+ * A line can be assembled from a symbol font and a Latin font at once - the
+ * title of these documents leads with a flag, and the flag is a pair of
+ * regional indicator symbols (U+1F1FA U+1F1F8) that no Latin face covers. Those
+ * symbols must not decide which family the *line* is rendered in: doing so let
+ * the emoji font claim the line and handed the whole sentence to its fallback,
+ * which restyled the English words as sans. The symbols resolve on their own at
+ * render time, through the emoji faces lower down the stack.
+ */
+export function isLatinBearing(text: string | undefined | null): boolean {
+  return !!text && LATIN_LETTER_OR_DIGIT.test(text);
+}
+
+/**
  * Font stack for Devanagari overlay text.
  *
  * Ordered so a real, *bold-capable* Devanagari family wins. Picking a family
@@ -35,6 +59,91 @@ export const DEVANAGARI_RANGE = /[\u0900-\u097F]/;
 export const DEVANAGARI_FONT_STACK =
   '"Nirmala UI", "Noto Sans Devanagari", "Kohinoor Devanagari", Mangal, ' +
   '"Noto Sans", "Segoe UI", Roboto, Arial, sans-serif';
+
+/** Used when a line reports no usable family at all. */
+export const DEFAULT_LATIN_FONT_STACK = 'Arial, Helvetica, sans-serif';
+
+/** One CSS family: a quoted name, or a bare run of characters up to a comma. */
+const FAMILY_TOKEN = /"[^"]*"|'[^']*'|[^,]+/g;
+
+/**
+ * CSS generic families. These always resolve, so one appearing mid-stack
+ * silently makes every family after it unreachable.
+ */
+const GENERIC_FAMILIES = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'math',
+  'emoji',
+  'fangsong',
+  'ui-serif',
+  'ui-sans-serif',
+  'ui-monospace',
+  'ui-rounded',
+]);
+
+function splitFamilies(stack: string): string[] {
+  return (stack.match(FAMILY_TOKEN) ?? []).map((f) => f.trim()).filter(Boolean);
+}
+
+const familyKey = (family: string) => family.toLowerCase().replace(/["']/g, '').trim();
+
+/**
+ * Concatenate CSS font stacks, keeping the first occurrence of each family.
+ *
+ * Order is what decides rendering, so the caller controls priority by argument
+ * order, with one exception: generic families are always emitted last. Merging
+ * `'"Nirmala UI", "Mangal", sans-serif'` with a longer stack naively would put
+ * `sans-serif` in the middle, and because it always resolves, every family
+ * after it would be dead.
+ *
+ * Quoting is normalised for the dedupe key only - the original token is what
+ * gets emitted, so `"Noto Sans Devanagari"` keeps its quotes.
+ */
+export function mergeFontStacks(...stacks: Array<string | undefined | null>): string {
+  const concrete: string[] = [];
+  const generic: string[] = [];
+  const seen = new Set<string>();
+
+  for (const stack of stacks) {
+    for (const family of splitFamilies(stack ?? '')) {
+      const key = familyKey(family);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      (GENERIC_FAMILIES.has(key) ? generic : concrete).push(family);
+    }
+  }
+
+  return [...concrete, ...generic].join(', ');
+}
+
+/**
+ * The font stack an overlay line should be rendered with.
+ *
+ * CSS font fallback is resolved *per character*, not per run, which is what
+ * makes this the right shape for a bilingual line. These documents build each
+ * line from two different embedded fonts - a Latin face for the English words
+ * and Nirmala UI for the Hindi - so the line's own family is kept as the
+ * primary and the Devanagari faces are appended as fallbacks. Latin characters
+ * then resolve from the original family and keep the original letterforms,
+ * while Devanagari codepoints, which that family does not cover, fall through
+ * to Nirmala UI and get correct matra shaping.
+ *
+ * The previous behaviour replaced the whole line with DEVANAGARI_FONT_STACK as
+ * soon as a single Devanagari codepoint was present. That fixed the shaping but
+ * restyled every English word on the line the moment it was clicked - the
+ * reported "font changes when clicked".
+ */
+export function resolveFontStack(fontFamily: string | undefined, text: string): string {
+  const primary = fontFamily?.trim() || DEFAULT_LATIN_FONT_STACK;
+  return DEVANAGARI_RANGE.test(text)
+    ? mergeFontStacks(primary, DEVANAGARI_FONT_STACK)
+    : primary;
+}
 
 const isDevanagariChar = (ch: string) => {
   const c = ch.codePointAt(0)!;
@@ -58,11 +167,46 @@ function isMatra(ch: string): boolean {
   );
 }
 
-/** Pre-base matras: they belong *before* their base in visual terms but are
- *  stored *after* it logically. Seeing one first is a strong corruption signal. */
+/**
+ * The nukta, U+093C. It sits inside the matra code-point range but is not a
+ * vowel sign: it modifies the consonant it follows (ड़, ख, ज़, फ़) and a matra
+ * after one is perfectly legal - खड़े, बड़े, फ़ॉर्म all rely on it.
+ *
+ * It is excluded from the "two vowel signs in a row" rules for that reason.
+ * Counting it as a matra made every nukta-plus-matra word look corrupt, and the
+ * stray-pre-base-matra repair then deleted the vowel outright:
+ *
+ *   कपड़े -> कपड़      फ़ॉर्म -> फ़र्म      बड़े -> बड़
+ *
+ * which silently stripped the vowel from some of the most common words in the
+ * language. See isVowelMatra.
+ */
+function isNukta(ch: string): boolean {
+  return ch?.codePointAt(0) === 0x093c;
+}
+
+/** A vowel sign, for the rules that forbid two of them in a row. */
+function isVowelMatra(ch: string): boolean {
+  return isMatra(ch) && !isNukta(ch);
+}
+
+/**
+ * Pre-base matras: ि (U+093F) and ॅ ॆ े ै ॉ ॊ ो ौ (U+0945–U+094C).
+ *
+ * These are stored *after* their base consonant in the encoding but are drawn
+ * to its left, which is what makes them so sensitive to bad font mapping. ा ी
+ * ु ू ृ and ॏ are post-base and are deliberately not listed.
+ *
+ * The original version tested only U+093F and U+094F. The first was right -
+ * "कि" really is a pre-base matra - but the second was not: ॏ is post-base,
+ * and the real pre-base vowel signs U+0945–U+094C were missing entirely, so
+ * the "leading pre-base matra" signal could never fire for a े or a ो. U+094D
+ * is the virama, not a matra, and is excluded.
+ */
 function isPreBaseMatra(ch: string): boolean {
   const c = ch?.codePointAt(0);
-  return c === 0x093f || c === 0x094f;
+  if (c == null) return false;
+  return c === 0x093f || (c >= 0x0945 && c <= 0x094c);
 }
 
 function isMatraOnlyToken(token: string): boolean {
@@ -116,7 +260,7 @@ export function findDevanagariIssues(text: string): string[] {
       issues.push('leading-prebase-matra');
     }
     for (let i = 1; i < chars.length; i++) {
-      if (isMatra(chars[i - 1]) && isMatra(chars[i])) {
+      if (isVowelMatra(chars[i - 1]) && isVowelMatra(chars[i])) {
         issues.push('matra-after-matra');
         break;
       }
@@ -167,8 +311,13 @@ export function repairDevanagari(text: string): { text: string; changed: boolean
     for (let i = 0; i < chars.length; i++) {
       const ch = chars[i];
       const prev = kept[kept.length - 1];
-      if (prev && isMatra(prev) && isMatra(ch)) {
-        if (isPreBaseMatra(ch) && !isPreBaseMatra(prev)) {
+      if (prev && isVowelMatra(prev) && isVowelMatra(ch)) {
+        // A pre-base matra is only ever valid as the first mark of a cluster, so
+        // one following any other vowel sign is a stray. Two exceptions: a
+        // virama closes the previous syllable, so a pre-base matra after it
+        // legitimately starts the next one; and a nukta is not a vowel sign at
+        // all, so कपड़े and फ़ॉर्म must survive intact.
+        if (isPreBaseMatra(ch) && !isPreBaseMatra(prev) && prev !== '\u094d') {
           repairs.add('drop-stray-prebase-matra');
           continue;
         }

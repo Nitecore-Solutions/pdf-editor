@@ -37,6 +37,13 @@ export interface ResolvedFontStyle {
   postScriptName: string | null;
   weight: number | null;
   source: 'program' | 'name' | 'none';
+  /**
+   * Ascent above the baseline, in em. Null when the font carries no program to
+   * read - the standard 14 fonts are not embedded, so there is nothing to parse.
+   */
+  ascentEm: number | null;
+  /** Descent below the baseline, in em, as a positive number. */
+  descentEm: number | null;
 }
 
 // Subset prefixes look like "BCDEEE+"; they carry no style information.
@@ -132,7 +139,7 @@ function readNameTable(view: DataView, table: { offset: number; length: number }
   return out;
 }
 
-function inspectFontProgram(data: ArrayBuffer | Uint8Array): Partial<ResolvedFontStyle> {
+export function inspectFontProgram(data: ArrayBuffer | Uint8Array): Partial<ResolvedFontStyle> {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tables = readSfntTables(view);
@@ -149,6 +156,40 @@ function inspectFontProgram(data: ArrayBuffer | Uint8Array): Partial<ResolvedFon
     out.isBold = !!(fsSelection & (1 << 5));
     out.isItalic = !!(fsSelection & (1 << 0));
     if (!out.isBold && weight >= 600) out.isBold = true;
+  }
+
+  // Vertical metrics, in em.
+  //
+  // These matter because the whiteout drawn over a line has to be tall enough to
+  // hide the glyphs underneath, and how far the ink reaches above the baseline
+  // is a property of the font, not a constant. A flat guess leaves the top of
+  // every pre-base matra uncovered - which is exactly where a legacy PDF's
+  // broken mark positioning puts a stray ै, so the mangled rendering of words
+  // like "कैसे" stayed visible through the whiteout.
+  const head = tables['head'];
+  let unitsPerEm = 0;
+  if (head && head.offset + 20 <= view.byteLength) {
+    unitsPerEm = view.getUint16(head.offset + 18);
+  }
+  if (unitsPerEm > 0) {
+    const hhea = tables['hhea'];
+    if (hhea && hhea.offset + 8 <= view.byteLength) {
+      const asc = view.getInt16(hhea.offset + 4);
+      const desc = view.getInt16(hhea.offset + 6);
+      if (asc > 0) out.ascentEm = asc / unitsPerEm;
+      if (desc < 0) out.descentEm = Math.abs(desc) / unitsPerEm;
+    }
+    if (out.ascentEm == null && os2 && os2.offset + 78 <= view.byteLength) {
+      const o = os2.offset;
+      const typoAsc = view.getInt16(o + 68);
+      const typoDesc = view.getInt16(o + 70);
+      const winAsc = view.getUint16(o + 74);
+      const winDesc = view.getUint16(o + 76);
+      if (typoAsc > 0) out.ascentEm = typoAsc / unitsPerEm;
+      else if (winAsc > 0) out.ascentEm = winAsc / unitsPerEm;
+      if (typoDesc < 0) out.descentEm = Math.abs(typoDesc) / unitsPerEm;
+      else if (winDesc > 0) out.descentEm = winDesc / unitsPerEm;
+    }
   }
 
   const nameTable = tables['name'];
@@ -238,6 +279,8 @@ export async function resolveFontStyles(
         subfamily: program.subfamily ?? null,
         postScriptName: program.postScriptName ?? psName,
         weight: program.weight ?? null,
+        ascentEm: program.ascentEm ?? null,
+        descentEm: program.descentEm ?? null,
         source: 'program',
       });
       continue;
@@ -251,6 +294,10 @@ export async function resolveFontStyles(
       subfamily: null,
       postScriptName: psName,
       weight: null,
+      // No program to read, so no metrics. The standard 14 fonts are the usual
+      // cause; callers fall back to per-family defaults for those.
+      ascentEm: null,
+      descentEm: null,
       source: psName || systemFamily ? 'name' : 'none',
     });
   }

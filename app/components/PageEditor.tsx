@@ -26,7 +26,7 @@ import {
   LinkElement
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
-import { DEVANAGARI_FONT_STACK, DEVANAGARI_RANGE } from '../lib/devanagari';
+import { DEVANAGARI_RANGE } from '../lib/devanagari';
 import { repairHindiLine } from '../lib/hindiRepair';
 import { RichTextEditor } from './RichTextEditor';
 
@@ -232,7 +232,6 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
   // Convert existing static PDF text to editable text (Bharat Job style)
   const handleConvertExistingText = (item: ExtractedTextItem) => {    const isDevanagari = /[\u0900-\u097F]/.test(item.str) || item.fontFamily?.includes('Devanagari');
-    const hindiFont = DEVANAGARI_FONT_STACK;
 
     // 1. Whiteout element covering original static text completely
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
@@ -245,13 +244,25 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     const yOffset = isDevanagari ? 0.15 : 0.05;
     const hExtra = isDevanagari ? 0.1 : 0.05;
 
+    // Horizontal slack, shared by the whiteout and the text box so the two line
+    // up exactly. `padLeft` is how far the whiteout reaches left of the glyph
+    // origin; `padX` is the total it adds on the right. The text box starts at
+    // the glyph origin and takes `padX - padLeft` as its width, which puts its
+    // right edge on the whiteout's right edge.
+    //
+    // The text box used to add more than this (2.5%/1.2% against the whiteout's
+    // 2.0%/0.8%), because it was `max-content` and needed room to grow into. It
+    // is pinned now, so matching the whiteout is both possible and correct.
+    const padLeft = 0.15;
+    const padX = isDevanagari ? 2.0 : 0.8;
+
     const whiteout: WhiteoutElement = {
       id: whiteoutId,
       pageIndex: pageInfo.pageIndex,
       type: 'whiteout',
-      x: Math.max(0, item.xPct - 0.15),
+      x: Math.max(0, item.xPct - padLeft),
       y: Math.max(0, item.yPct - yOffset),
-      width: Math.min(100 - item.xPct + 0.15, item.widthPct + (isDevanagari ? 2.0 : 0.8)),
+      width: Math.min(100 - item.xPct + padLeft, item.widthPct + padX),
       height: Math.min(100 - item.yPct + yOffset, item.heightPct + yOffset + hExtra),
       color: '#ffffff',
     };
@@ -276,15 +287,23 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       runs: runsAlign ? item.runs : undefined,
       x: item.xPct,
       y: Math.max(0, item.yPct - yOffset),
-      width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
+      width: Math.min(100 - item.xPct, item.widthPct + padX - padLeft),
       height: item.heightPct + yOffset + hExtra,
       fontSize: item.fontSize || 14,
-      fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
+      // Keep the family the PDF actually used. It used to be overwritten with
+      // the Devanagari stack for Hindi lines, which both restyled the English
+      // words and destroyed the only record of the original face - nothing
+      // downstream could recover it afterwards. The Devanagari faces are now
+      // appended at render time by resolveFontStack instead.
+      fontFamily: item.fontFamily || 'Arial, Helvetica, sans-serif',
       color: '#000000',
       isBold: runsAlign ? false : !!item.isBold,
       isItalic: runsAlign ? false : !!item.isItalic,
       isUnderline: false,
       align: 'left',
+      // Carried from the PDF so the overlay can put its glyphs on the original
+      // baseline instead of inferring one from the box.
+      baselinePct: item.baselinePct,
     };
 
     onAddElement([whiteout, newText]);
@@ -705,7 +724,16 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     : 'pointer-events-auto'
                 } ${
                   isSelected
-                    ? 'outline outline-2 outline-emerald-500 shadow-md z-30'
+                    ? `outline outline-2 outline-emerald-500 z-30${
+                        // No drop shadow on text. The element is a transparent box
+                        // sized to the glyphs, so a blurred box-shadow lands
+                        // directly on them and reads as heavier strokes - bold
+                        // lines looked visibly bolder the moment they were
+                        // selected. The outline is the selection affordance; the
+                        // shadow only ever helped the opaque elements, where it
+                        // sits against an image rather than against type.
+                        el.type === 'text' ? '' : ' shadow-md'
+                      }`
                     : canInteract
                     ? 'hover:outline hover:outline-1 hover:outline-emerald-300'
                     : ''
@@ -713,9 +741,24 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                 style={{
                   left: `${el.x}%`,
                   top: `${el.y}%`,
-                  width: el.type === 'text' ? 'max-content' : `${el.width}%`,
-                  maxWidth: el.type === 'text' ? `${Math.max(10, 100 - el.x)}%` : undefined,
-                  minWidth: el.type === 'text' ? `${el.width}%` : undefined,
+                  // A line that came from the document is pinned to the width of
+                  // the line it replaced. It used to be `max-content` with
+                  // `minWidth` as a floor, so the box grew and shrank with every
+                  // keystroke and stopped lining up with the whiteout drawn over
+                  // the original. Pinned, the outline and the whiteout stay
+                  // registered with the source line; longer text overflows to
+                  // the right, which is how a real overlay behaves.
+                  // Hand-drawn boxes keep the flexible sizing.
+                  width:
+                    el.type === 'text' && el.baselinePct == null
+                      ? 'max-content'
+                      : `${el.width}%`,
+                  maxWidth:
+                    el.type === 'text' && el.baselinePct == null
+                      ? `${Math.max(10, 100 - el.x)}%`
+                      : undefined,
+                  minWidth:
+                    el.type === 'text' && el.baselinePct == null ? `${el.width}%` : undefined,
                   height: `${el.height}%`,
                   overflow: el.type === 'text' ? 'visible' : undefined,
                 }}
@@ -778,6 +821,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                       element={el}
                       isSelected={isSelected}
                       zoom={zoom}
+                      pageHeightPx={displayedHeight}
                       onChange={(id, updates) => onUpdateElement(id, updates)}
                       onFocusSelect={(id) => {
                         if (selectedElementId !== id) onSelectElement(id);

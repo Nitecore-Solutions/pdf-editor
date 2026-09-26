@@ -4,7 +4,7 @@
 // file are unreliable: a matra can be silently normalised into the independent
 // vowel that looks identical, which is precisely the bug that shipped in the
 // engine itself and made a whole rule dead code.
-import { repairHindiLine, repairTokenLexical, isKnownWord } from '../hindiRepair.mjs';
+import { repairHindiLine, repairTokenLexical, isKnownWord } from '../app/lib/hindiRepair.ts';
 
 const cp = (...codes) => String.fromCodePoint(...codes);
 

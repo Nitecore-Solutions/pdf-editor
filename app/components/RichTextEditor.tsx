@@ -19,14 +19,18 @@ import {
   clearActiveTextSelection,
   setActiveTextSelection,
 } from '../lib/textSelection';
-import { DEVANAGARI_FONT_STACK } from '../lib/devanagari';
-
-const DEVANAGARI_FALLBACK = DEVANAGARI_FONT_STACK;
+import { resolveFontStack } from '../lib/devanagari';
+import { firstBaselineOffset, measureFontMetrics } from '../lib/fontMetrics';
 
 interface RichTextEditorProps {
   element: TextElement;
   isSelected: boolean;
   zoom: number;
+  /**
+   * Rendered height of the page in px. Needed to turn the element's baseline
+   * percentage into a pixel offset inside the page.
+   */
+  pageHeightPx: number;
   onChange: (id: string, updates: Partial<TextElement>) => void;
   onFocusSelect: (id: string) => void;
   onEmptyBlur: (id: string) => void;
@@ -61,6 +65,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   element,
   isSelected,
   zoom,
+  pageHeightPx,
   onChange,
   onFocusSelect,
   onEmptyBlur,
@@ -77,23 +82,54 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
 
   const isDevanagari = /[\u0900-\u097F]/.test(element.text || '');
 
-  const fontFamily = useMemo(() => {
-    // Any line containing Devanagari is rendered with the Devanagari stack,
-    // regardless of what family the PDF reported.
-    //
-    // The previous version only swapped when the PDF's family looked like a
-    // Devanagari face. That missed the common case entirely: legacy Hindi PDFs
-    // report "Times New Roman" or "Arial" for their Devanagari runs, so a
-    // serif face with no Devanagari coverage was used. The browser then fell
-    // back glyph by glyph, and the pre-base matra was drawn detached from its
-    // consonant - "लिए" rendered as "हिए".
-    //
-    // The stack ends in Latin families, so the English words on the same line
-    // are still handled.
-    if (isDevanagari) return DEVANAGARI_FONT_STACK;
-    if (element.fontFamily) return element.fontFamily;
-    return 'Arial, Helvetica, sans-serif';
-  }, [element.fontFamily, isDevanagari]);
+  // The PDF's own family stays primary and the Devanagari faces are appended as
+  // fallbacks, so the English words on a bilingual line keep their original
+  // letterforms and only the Devanagari codepoints - which the primary family
+  // does not cover - resolve to Nirmala UI. See resolveFontStack for why this
+  // has to be a merged stack rather than a straight swap.
+  const fontFamily = useMemo(
+    () => resolveFontStack(element.fontFamily, element.text || ''),
+    [element.fontFamily, element.text]
+  );
+
+  const fontSizePx = (element.fontSize || 14) * zoom;
+  const lineHeight = isDevanagari ? 1.3 : 1.2;
+
+  // Only lines that came from the document are locked. A box the user drew by
+  // hand has no original baseline or width to match, so it keeps the flexible
+  // grow-and-wrap behaviour.
+  const pinned = element.baselinePct != null;
+
+  // Vertical lock: shift the text so its first baseline sits on the baseline the
+  // PDF drew, instead of on a cap-height fraction of the font size guessed once
+  // for every font. The box itself keeps its original top, so the selection
+  // outline and the whiteout stay where they were; only the glyphs move, and
+  // they move by however much this font's own metrics differ from the guess.
+  //
+  // Boxes with no recorded baseline - anything the user drew by hand - have no
+  // original to match, so they keep the old behaviour and sit at the box top.
+  const baselineShift = useMemo(() => {
+    const target = element.baselinePct;
+    if (target == null || !pageHeightPx) return 0;
+
+    const metrics = measureFontMetrics(
+      `${base.isBold ? 'bold ' : ''}${base.isItalic ? 'italic ' : ''}${fontSizePx}px ${fontFamily}`
+    );
+    if (!metrics) return 0;
+
+    // Where the first baseline has to land, measured down from the box top.
+    const targetFromBoxTop = ((target - element.y) / 100) * pageHeightPx;
+    return targetFromBoxTop - firstBaselineOffset(metrics, fontSizePx, lineHeight);
+  }, [
+    element.baselinePct,
+    element.y,
+    pageHeightPx,
+    fontSizePx,
+    fontFamily,
+    lineHeight,
+    base.isBold,
+    base.isItalic,
+  ]);
 
   // ---- model -> DOM -------------------------------------------------------
   useEffect(() => {
@@ -314,24 +350,27 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
 
   return (
     <>
-      {/* Intrinsic-width probe. Absolutely positioned, so it never paints and
-          never intercepts clicks, but it gives the surrounding box a real
-          max-content width to size itself against. Without it the box would
-          collapse to the element's stored width and long text would wrap
-          mid-word. */}
-      <span
-        aria-hidden
-        className="absolute invisible whitespace-pre pointer-events-none"
-        style={{
-          fontSize: `${(element.fontSize || 14) * zoom}px`,
-          fontWeight: base.isBold ? 700 : 400,
-          fontStyle: base.isItalic ? 'italic' : 'normal',
-          fontFamily,
-          lineHeight: 1.2,
-        }}
-      >
-        {element.text || ' '}
-      </span>
+      {/* Intrinsic-width probe, only for boxes that are *not* pinned. It is
+          absolutely positioned, so it never paints and never intercepts clicks,
+          but it gives a `max-content` box a real width to size against; without
+          it a hand-drawn box would collapse to its stored width and wrap
+          mid-word. Pinned lines take their width from the PDF and have no use
+          for it, and leaving it in would drag the box around again. */}
+      {!pinned && (
+        <span
+          aria-hidden
+          className="absolute invisible whitespace-pre pointer-events-none"
+          style={{
+            fontSize: `${fontSizePx}px`,
+            fontWeight: base.isBold ? 700 : 400,
+            fontStyle: base.isItalic ? 'italic' : 'normal',
+            fontFamily,
+            lineHeight,
+          }}
+        >
+          {element.text || ' '}
+        </span>
+      )}
 
       <div
         ref={nodeRef}
@@ -358,7 +397,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         }}
         className="outline-none bg-transparent border-none p-0 m-0 cursor-text select-text"
         style={{
-          fontSize: `${(element.fontSize || 14) * zoom}px`,
+          fontSize: `${fontSizePx}px`,
           color: base.color,
           fontWeight: base.isBold ? 700 : 400,
           fontStyle: base.isItalic ? 'italic' : 'normal',
@@ -372,7 +411,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           // matras (े ै ो ौ) and the bottom ones (ु ू ृ), so 1.3 still contains
           // them comfortably - extra leading was never what the matras needed,
           // letter-spacing was the actual problem.
-          lineHeight: isDevanagari ? 1.3 : 1.2,
+          lineHeight,
           // Deliberately 'normal'. A previous version applied letterSpacing to
           // Devanagari, which inserts space between every codepoint pair -
           // including between a base consonant and its zero-width matra. That
@@ -382,11 +421,19 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           wordSpacing: 'normal',
           fontKerning: 'normal',
           fontVariantLigatures: 'common-ligatures',
-          whiteSpace: 'pre-wrap',
-          overflowWrap: 'break-word',
+          // 'pre' for a locked line, so text that no longer fits runs past the
+          // box rather than wrapping onto a second baseline that has no
+          // equivalent in the original. `overflow: visible` on the element layer
+          // lets it show. Hand-drawn boxes keep wrapping.
+          whiteSpace: pinned ? 'pre' : 'pre-wrap',
+          overflowWrap: pinned ? 'normal' : 'break-word',
           width: '100%',
           minWidth: '30px',
           padding: '0 1px',
+          // The vertical lock. Relative rather than absolute so the div still
+          // takes part in layout and the caret/selection behave normally.
+          position: 'relative',
+          top: `${baselineShift}px`,
         }}
       />
     </>

@@ -56,6 +56,15 @@ export interface TextElement extends BaseElement {
   isItalic: boolean;
   isUnderline: boolean;
   align: 'left' | 'center' | 'right';
+  /**
+   * The line's baseline as a percentage of page height, taken from the PDF.
+   *
+   * Text is positioned by this rather than by the top of its box, so the glyphs
+   * sit on the same baseline as the canvas underneath no matter which font the
+   * browser ends up substituting. Absent on boxes the user created by hand,
+   * which have no original baseline to match and keep using their box top.
+   */
+  baselinePct?: number;
 }
 
 export interface WhiteoutElement extends BaseElement {

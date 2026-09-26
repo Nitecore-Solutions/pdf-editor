@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "tsx tests/hindiRepair.test.mjs && tsx tests/fontStack.test.mjs && tsx tests/noDamage.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.33.0",
@@ -22,6 +23,7 @@
     "@types/react-dom": "^19",
     "babel-plugin-react-compiler": "1.0.0",
     "tailwindcss": "^4",
+    "tsx": "^4",
     "typescript": "^5"
   }
 }

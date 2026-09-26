@@ -1,11 +1,13 @@
 // Robust client-side PDF.js loader with isolated offscreen canvas rendering
-import { resolveFontStyles } from './fontStyles';
+import { resolveFontStyles, ResolvedFontStyle } from './fontStyles';
 import {
   DEVANAGARI_RANGE,
   findDevanagariIssues,
+  isLatinBearing,
   isOrphanMatraToken,
   repairDevanagari,
 } from './devanagari';
+import { applyMisreadings } from './hindiRepair';
 import type { TextRun } from '../types/editor';
 
 let pdfjsLibInstance: any = null;
@@ -110,6 +112,70 @@ export async function renderPdfPage({
   };
 }
 
+/**
+ * Ink extent above and below the baseline, in em.
+ *
+ * Preferred source is the embedded font program's own hhea/OS-2 metrics. The
+ * standard 14 fonts are not embedded and have no program to read, so those fall
+ * back to published per-family figures keyed off the same name heuristics used
+ * for the family, and finally to the old flat guesses.
+ *
+ * The result is floored at those guesses and capped: a whiteout that is too
+ * short shows the original glyphs through, which is the bug this fixes, whereas
+ * a slightly tall one is merely untidy. The cap stops a pathological ascent from
+ * producing a box tall enough to cover the line above.
+ */
+const FALLBACK_ASCENT_LATIN = 0.8;
+const FALLBACK_DESCENT_LATIN = 0.28;
+const FALLBACK_ASCENT_DEVANAGARI = 0.98;
+const FALLBACK_DESCENT_DEVANAGARI = 0.32;
+
+const MAX_ASCENT = 1.2;
+
+const ASCENT_BY_FAMILY: Array<[RegExp, number]> = [
+  // Devanagari UI faces carry a very tall ascent - the top matras live up there.
+  [/nirmala|mangal|devanagari|utsaah|kokila/, 1.079],
+  [/times/, 0.891],
+  [/arial|helvetica|liberation/, 0.905],
+  [/calibri|carlito/, 0.75],
+  [/segoe/, 1.079],
+  [/tahoma/, 1.0],
+  [/verdana/, 1.008],
+  [/trebuchet/, 0.939],
+  [/cambria|caladea/, 0.95],
+  [/georgia/, 0.917],
+  [/garamond/, 0.928],
+  [/palatino|book ?antiqua/, 0.925],
+  [/courier|consolas|monospace/, 0.833],
+];
+
+export function verticalMetricsFor(
+  resolved: ResolvedFontStyle | undefined,
+  fontNameLower: string,
+  isDevanagari: boolean
+): { ascentEm: number; descentEm: number } {
+  const floorAscent = isDevanagari ? FALLBACK_ASCENT_DEVANAGARI : FALLBACK_ASCENT_LATIN;
+  const floorDescent = isDevanagari ? FALLBACK_DESCENT_DEVANAGARI : FALLBACK_DESCENT_LATIN;
+
+  let ascent = resolved?.ascentEm ?? null;
+  let descent = resolved?.descentEm ?? null;
+
+  if (ascent == null) {
+    const hay = `${fontNameLower} ${resolved?.family || ''} ${resolved?.postScriptName || ''}`;
+    for (const [re, value] of ASCENT_BY_FAMILY) {
+      if (re.test(hay)) {
+        ascent = value;
+        if (descent == null) descent = value * 0.25;
+        break;
+      }
+    }
+  }
+
+  const ascentEm = Math.min(MAX_ASCENT, Math.max(floorAscent, ascent ?? floorAscent));
+  const descentEm = Math.max(floorDescent, descent ?? floorDescent);
+  return { ascentEm, descentEm };
+}
+
 export interface ExtractedTextItem {
   id: string;
   str: string;
@@ -165,6 +231,11 @@ export async function extractPageTextItems(
     // exactly that, so words welded together ("मेंिहने" for "में िहने").
     if (!item.str) continue;
 
+    const fontStyleObj = styles[item.fontName] || {};
+    const fontNameLower = (item.fontName || '').toLowerCase();
+    const styleFontFamily = (fontStyleObj.fontFamily || '').toLowerCase();
+    const resolved = resolvedFonts.get(item.fontName);
+
     const tx = item.transform; // [a, b, c, d, x, y]
     // Calculate font size in points and CSS pixels
     const fontPt = Math.hypot(tx[2], tx[3]) || Math.hypot(tx[0], tx[1]) || 12;
@@ -174,10 +245,24 @@ export async function extractPageTextItems(
     // Convert PDF baseline coordinate to viewport coordinate
     const [vx, vy] = viewport.convertToViewportPoint(tx[4], tx[5]);
 
-    // Precise Cap-Height offset aligns HTML text baseline 1:1 with canvas and covers Devanagari top matras
     const isDevanagari = /[\u0900-\u097F]/.test(item.str);
-    const capHeightOffset = isDevanagari ? fontPx * 0.98 : fontPx * 0.80;
-    const boxHeight = isDevanagari ? fontPx * 1.30 : fontPx * 1.08;
+
+    // How far the ink reaches above and below the baseline.
+    //
+    // These used to be flat guesses of 0.80em/0.98em, which is a real font's
+    // ascent only by coincidence: Nirmala UI reports 1.079em and Times New Roman
+    // 0.891em. Under-covering by that much left the top ~1.5px of every line
+    // showing through the whiteout, and on these documents that strip is exactly
+    // where a pre-base matra sits - so the embedded font's broken mark
+    // positioning left "कैसे" readable as "केसै" through the whiteout.
+    //
+    // The measured values come from the embedded font program. They are floored
+    // at the old guesses and capped, so this can only ever cover more than
+    // before, never less, and a font with an absurd ascent cannot produce a box
+    // that swallows the line above.
+    const { ascentEm, descentEm } = verticalMetricsFor(resolved, fontNameLower, isDevanagari);
+    const capHeightOffset = fontPx * ascentEm;
+    const boxHeight = fontPx * (ascentEm + descentEm);
 
     const boxX = vx;
     const boxY = vy - capHeightOffset;
@@ -189,10 +274,6 @@ export async function extractPageTextItems(
     const widthPct = Math.min(100 - xPct, (boxW / viewport.width) * 100);
     const heightPct = Math.min(100 - yPct, (boxH / viewport.height) * 100);
 
-    const fontStyleObj = styles[item.fontName] || {};
-    const fontNameLower = (item.fontName || '').toLowerCase();
-    const styleFontFamily = (fontStyleObj.fontFamily || '').toLowerCase();
-    const resolved = resolvedFonts.get(item.fontName);
 
     // Detect Bold. Prefer the font program's OS/2 weight/fsSelection bits, fall
     // back to the original PostScript name, and only then to the name heuristic.
@@ -244,15 +325,29 @@ export async function extractPageTextItems(
     const isPalatinoOrBook = nameHaystack.includes('palatino') || nameHaystack.includes('book antiqua');
     // Windows Devanagari UI font; the original documents rely on it heavily.
     const isNirmalaUI = nameHaystack.includes('nirmala ui') || nameHaystack.includes('nirmalui');
+    // Symbol and colour-emoji faces. These must never be mistaken for a text
+    // family: an emoji run that wins a line hands the sentence to whatever the
+    // symbol font falls back to, which is how a Times New Roman title ended up
+    // typeset in sans. Checked before the Latin branches so a name like
+    // "ArialEmoji" cannot be read as Arial.
+    const isEmojiFont =
+      nameHaystack.includes('emoji') ||
+      nameHaystack.includes('symbol') ||
+      nameHaystack.includes('wingdings') ||
+      nameHaystack.includes('webdings');
 
     const isSerif = 
-      !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet && !isNirmalaUI &&
+      !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet && !isNirmalaUI && !isEmojiFont &&
       (isTimes || isGaramond || isCambria || isGeorgia || isPalatinoOrBook ||
        nameHaystack.includes('roman') ||
        (styleFontFamily.includes('serif') && !styleFontFamily.includes('sans')));
 
     let fontFamily: string;
-    if (isNirmalaUI) {
+    if (isEmojiFont) {
+      fontFamily =
+        '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", ' +
+        '"Segoe UI Symbol", "Symbola", sans-serif';
+    } else if (isNirmalaUI) {
       fontFamily = '"Nirmala UI", "Noto Sans Devanagari", "Mangal", sans-serif';
     } else if (isMonospace) {
       fontFamily = '"Courier New", Courier, monospace';
@@ -496,6 +591,11 @@ function orderItemsForLogicalText(line: any[]): any[] {
     // Repairing each styled segment independently keeps the structure intact
     // and the bold survives.
     const repairedPieces = pieces.map((p) => {
+      // Known misreadings first, and taken verbatim. The structural pass below
+      // would delete the matra in "इस्तेमाि" as a stray, and with it the
+      // evidence that the glyph was really a ल.
+      const read = applyMisreadings(p.text);
+      if (read !== p.text) return { ...p, text: read };
       const r = repairDevanagari(p.text);
       return r.changed ? { ...p, text: r.text } : p;
     });
@@ -521,6 +621,27 @@ function orderItemsForLogicalText(line: any[]): any[] {
     const minY = Math.min(...line.map(b => b.yPct));
     const maxY = Math.max(...line.map(b => b.yPct + b.heightPct));
 
+    // A bilingual line is assembled from two different embedded fonts: a Latin
+    // face for the English words and Nirmala UI for the Hindi. The result can
+    // only carry one `fontFamily`, and that value becomes the *primary* entry
+    // of the render stack (the Devanagari faces are appended after it), so it
+    // has to come from an item that actually draws Latin glyphs.
+    //
+    // Taking ordered[0] blindly was wrong twice over. A line starting with a
+    // Hindi word was rendered wholly in Nirmala UI, restyling its English too;
+    // and the title line leads with a flag, whose regional indicator symbols
+    // matched a naive "not Devanagari" test, so the *emoji* font claimed the
+    // line and handed the whole sentence to its sans fallback. isLatinBearing
+    // requires a real letter or digit, which excludes symbols as well.
+    const latinSource = ordered.find((o) => isLatinBearing(o.str)) ?? ordered[0];
+
+    // The line's true baseline, straight from the PDF. Items were clustered by
+    // baseline, so this is the one the overlay has to land on. It is carried
+    // through rather than re-derived from the box, because the box top is a
+    // cap-height guess and guessing twice compounds the error.
+    const lineBaselinePct =
+      line.reduce((s: number, b: any) => s + (b.baselinePct ?? b.yPct), 0) / line.length;
+
     return {
       id: `txt_${originalPageIndex}_${idx}`,
       str: lineText,
@@ -529,11 +650,12 @@ function orderItemsForLogicalText(line: any[]): any[] {
       widthPct: Math.min(100 - minX, (maxX - minX) + 0.8),
       heightPct: maxY - minY,
       fontSize: ordered[0].fontSize,
-      fontFamily: ordered[0].fontFamily,
+      fontFamily: latinSource.fontFamily,
       isBold: allBold,
       isItalic: allItalic,
       runs: lineRuns,
       devanagariIssues,
+      baselinePct: lineBaselinePct,
     };
   });
 
