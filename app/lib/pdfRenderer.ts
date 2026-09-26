@@ -1,5 +1,11 @@
 // Robust client-side PDF.js loader with isolated offscreen canvas rendering
 import { resolveFontStyles } from './fontStyles';
+import {
+  DEVANAGARI_RANGE,
+  findDevanagariIssues,
+  isOrphanMatraToken,
+  repairDevanagari,
+} from './devanagari';
 import type { TextRun } from '../types/editor';
 
 let pdfjsLibInstance: any = null;
@@ -120,6 +126,8 @@ export interface ExtractedTextItem {
    * Concatenating the run texts reproduces `str`.
    */
   runs?: TextRun[];
+  /** Structural Devanagari problems; drives the model-assisted repair gate. */
+  devanagariIssues?: string[];
   baselinePct?: number;
 }
 
@@ -292,9 +300,26 @@ export async function extractPageTextItems(
 
   if (extracted.length === 0) return [];
 
+  // 0. Drop duplicate glyph emissions.
+  //
+  // Some producers draw the same text run twice at near-identical positions
+  // (a pre-base matra is often emitted with the base and again on its own).
+  // Without this the line assembly concatenates the word with itself, which is
+  // what makes Devanagari words appear doubled and glued to their neighbours.
+  const deduped: typeof extracted = [];
+  for (const item of extracted) {
+    const duplicate = deduped.find(
+      (kept) =>
+        kept.str === item.str &&
+        Math.abs((kept.baselinePct ?? 0) - (item.baselinePct ?? 0)) < 0.4 &&
+        Math.abs(kept.xPct - item.xPct) < 0.4
+    );
+    if (!duplicate) deduped.push(item);
+  }
+
   // 1. Cluster items into lines by vertical baseline proximity
   const lines: any[][] = [];
-  const sorted = [...extracted].sort((a: any, b: any) => a.baselinePct - b.baselinePct);
+  const sorted = [...deduped].sort((a: any, b: any) => a.baselinePct - b.baselinePct);
 
   for (const block of sorted) {
     let matched = false;
@@ -316,9 +341,46 @@ export async function extractPageTextItems(
     return aBase - bBase;
   });
 
+/**
+ * Reorder items so an orphaned matra follows the base it belongs to.
+ *
+ * A matra is drawn relative to its cluster, so pdf.js can report it as its own
+ * item whose x sits at (or left of) the base's origin, even though logically it
+ * belongs after. Sorting purely by x therefore produces "ा क्य" instead of
+ * "क्या".
+ *
+ * The overlap test is what makes this safe: a matra is only moved when it
+ * physically overlaps the following cluster, which is the signature of it being
+ * drawn *on* that cluster. A matra that sits in clear space on its own is left
+ * exactly where it was.
+ */
+function orderItemsForLogicalText(line: any[]): any[] {
+  const out: any[] = [];
+  for (let i = 0; i < line.length; i++) {
+    const item = line[i];
+    const next = line[i + 1];
+
+    if (
+      isOrphanMatraToken(item.str) &&
+      next &&
+      DEVANAGARI_RANGE.test(next.str) &&
+      item.widthPct < 1.2 &&
+      next.xPct < item.xPct + item.widthPct
+    ) {
+      out.push(next);
+      out.push(item);
+      i++;
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
   // 2. Assemble each clustered line into a single cohesive line item spanning full width
   const merged: ExtractedTextItem[] = lines.map((line, idx) => {
     line.sort((a, b) => a.xPct - b.xPct);
+    const ordered = orderItemsForLogicalText(line);
 
     // Track styling per segment rather than collapsing the line to a single
     // flag. A line like "Date: 20 August 2026" followed by a bold name stays
@@ -332,14 +394,15 @@ export async function extractPageTextItems(
       else pieces.push({ text, isBold, isItalic });
     };
 
-    let fullText = line[0].str;
-    push(line[0].str, !!line[0].isBold, !!line[0].isItalic);
+    let fullText = ordered[0].str;
+    push(ordered[0].str, !!ordered[0].isBold, !!ordered[0].isItalic);
 
-    for (let i = 1; i < line.length; i++) {
-      const prev = line[i - 1];
-      const curr = line[i];
+    for (let i = 1; i < ordered.length; i++) {
+      const prev = ordered[i - 1];
+      const curr = ordered[i];
       const gap = curr.xPct - (prev.xPct + prev.widthPct);
-      const isCombining = /^[\u0901-\u0903\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963]/.test(curr.str);
+      // Never space out a mark that belongs to the cluster before it.
+      const isCombining = isOrphanMatraToken(curr.str) || /^[\u0901-\u0903\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963]/.test(curr.str);
       const needsSpace = !isCombining && gap > 0.1 && !fullText.endsWith(' ') && !curr.str.startsWith(' ');
       if (needsSpace) {
         fullText += ' ';
@@ -350,10 +413,16 @@ export async function extractPageTextItems(
       push(curr.str, !!curr.isBold, !!curr.isItalic);
     }
 
+    // Apply the repairs that are unambiguously correct. If the text shifts, the
+    // run offsets no longer line up, so the line falls back to a uniform style
+    // rather than mis-styling the wrong characters.
+    const repaired = repairDevanagari(fullText.trim());
+    const repairedChanged = repaired.changed;
+
     // Only worth carrying when the line is genuinely mixed.
     const allBold = pieces.every((p) => p.isBold);
     const allItalic = pieces.every((p) => p.isItalic);
-    const mixed = !allBold || !allItalic;
+    const mixed = !repairedChanged && (!allBold || !allItalic);
     const lineRuns: TextRun[] | undefined = mixed
       ? pieces.map((p) => ({
           text: p.text,
@@ -363,6 +432,9 @@ export async function extractPageTextItems(
         }))
       : undefined;
 
+    const lineText = repairedChanged ? repaired.text : fullText.trim();
+    const devanagariIssues = findDevanagariIssues(lineText);
+
     const minX = Math.min(...line.map(b => b.xPct));
     const maxX = Math.max(...line.map(b => b.xPct + b.widthPct));
     const minY = Math.min(...line.map(b => b.yPct));
@@ -370,16 +442,17 @@ export async function extractPageTextItems(
 
     return {
       id: `txt_${originalPageIndex}_${idx}`,
-      str: fullText.trim(),
+      str: lineText,
       xPct: minX,
       yPct: minY,
       widthPct: Math.min(100 - minX, (maxX - minX) + 0.8),
       heightPct: maxY - minY,
-      fontSize: line[0].fontSize,
-      fontFamily: line[0].fontFamily,
+      fontSize: ordered[0].fontSize,
+      fontFamily: ordered[0].fontFamily,
       isBold: allBold,
       isItalic: allItalic,
       runs: lineRuns,
+      devanagariIssues,
     };
   });
 

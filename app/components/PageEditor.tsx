@@ -7,7 +7,9 @@ import {
   PlusCircle, 
   ExternalLink,
   GripHorizontal,
-  Check
+  Check,
+  Loader2,
+  WandSparkles
 } from 'lucide-react';
 import { 
   PageInfo, 
@@ -26,9 +28,12 @@ import {
   LinkElement
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
+import { pageLooksBroken, DEVANAGARI_FONT_STACK } from '../lib/devanagari';
 import { RichTextEditor } from './RichTextEditor';
 
 // Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
+const isDevanagariLine = (item: { str: string }) => /[\u0900-\u097F]/.test(item.str);
+
 function generateSmoothPathData(points: { x: number; y: number }[], width: number, height: number): string {
   if (!points || points.length === 0) return '';
   if (points.length === 1) {
@@ -116,6 +121,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   const [extractedTexts, setExtractedTexts] = useState<ExtractedTextItem[]>([]);
   const [hoveredTextId, setHoveredTextId] = useState<string | null>(null);
   const [editedOriginalIds, setEditedOriginalIds] = useState<Set<string>>(new Set());
+  const [repairingTextId, setRepairingTextId] = useState<string | null>(null);
 
   // Freehand drawing in-progress state
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[] | null>(null);
@@ -166,23 +172,38 @@ export const PageEditor: React.FC<PageEditorProps> = ({
           setExtractedTexts(textItems);
         }
 
-        // Automatic AI OCR enhancement ONLY for pages containing Devanagari / Hindi script
-        const hasDevanagari = textItems.some((item) => /[\u0900-\u097F]/.test(item.str));
-        if (hasDevanagari && textItems.length > 0) {
+        // Model-assisted repair, but only for pages whose font mapping is
+        // genuinely broken.
+        //
+        // Previously every page containing Devanagari was pushed through the
+        // OCR endpoint, which "corrected" already-correct lines and produced the
+        // garbled Hindi users were seeing. A clean page is now left byte-for-byte
+        // alone; only a page whose lines are structurally broken escalates.
+        if (pageLooksBroken(textItems.map((t) => ({ text: t.str, issues: t.devanagariIssues ?? [] })))) {
           try {
             const ocrRes = await fetch('/api/ocr', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ lines: textItems }),
+              signal: AbortSignal.timeout(60_000),
             });
             if (ocrRes.ok) {
               const ocrData = await ocrRes.json();
               if (!isCancelled && ocrData?.success && Array.isArray(ocrData.lines) && ocrData.lines.length > 0) {
-                setExtractedTexts(ocrData.lines);
+                // Keep the freshly extracted geometry (which is measured, not
+                // inferred) and take only the repaired text from the model.
+                const repairedText = new Map<string, string>(
+                  ocrData.lines.map((l: any) => [l.id, l.str])
+                );
+                setExtractedTexts(
+                  textItems.map((t) =>
+                    repairedText.has(t.id) ? { ...t, str: repairedText.get(t.id)! } : t
+                  )
+                );
               }
             }
           } catch {
-            // Graceful fallback to client-extracted lines
+            // Graceful fallback: the deterministic repairs already applied stand.
           }
         }
       } catch (err: any) {
@@ -207,24 +228,62 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   // Filter elements on this page
   const pageElements = elements.filter((el) => el.pageIndex === pageInfo.pageIndex);
 
+  /**
+   * Re-read one line through the repair endpoint. Used for lines the structural
+   * checks cannot fix but the user can see are wrong. Failures leave the line
+   * untouched - repairing text must never be able to destroy it.
+   */
+  const handleRepairLine = async (item: ExtractedTextItem) => {
+    setRepairingTextId(item.id);
+    try {
+      const res = await fetch('/api/ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lines: [item] }),
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const repaired = data?.lines?.[0]?.str;
+      // Ignore a response that came back empty or did not actually change
+      // anything meaningful.
+      if (typeof repaired !== 'string' || !repaired.trim()) return;
+      setExtractedTexts((prev) =>
+        prev.map((t) => (t.id === item.id ? { ...t, str: repaired } : t))
+      );
+    } catch {
+      // Leave the line as-is on any failure.
+    } finally {
+      setRepairingTextId(null);
+    }
+  };
+
   // Convert existing static PDF text to editable text (Bharat Job style)
-  const handleConvertExistingText = (item: ExtractedTextItem) => {
-    const isDevanagari = /[\u0900-\u097F]/.test(item.str) || item.fontFamily?.includes('Devanagari');
-    const hindiFont = '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif';
+  const handleConvertExistingText = (item: ExtractedTextItem) => {    const isDevanagari = /[\u0900-\u097F]/.test(item.str) || item.fontFamily?.includes('Devanagari');
+    const hindiFont = DEVANAGARI_FONT_STACK;
 
     // 1. Whiteout element covering original static text completely
     const whiteoutId = 'el_wo_' + Math.random().toString(36).substr(2, 9);
-    const yOffset = isDevanagari ? 0.15 : 0.05;
-    const hExtra = isDevanagari ? 0.1 : 0.05;
+    // Devanagari ascends well above the Latin cap height (the shirorekha and the
+    // े ै ो ौ matras) and descends below the baseline (ु ू ृ), and the overlay
+    // is rendered with extra leading. The whiteout therefore needs to be far
+    // more generous than the text box, or the top and bottom of the original
+    // line stay visible around the replacement.
+    const whiteoutPadY = isDevanagari ? 0.6 : 0.05;
+    const whiteoutPadH = isDevanagari ? 0.7 : 0.05;
+    // The text box only needs a small nudge; moving it a lot would drag the
+    // baseline away from the line it is meant to replace.
+    const textPadY = isDevanagari ? 0.12 : 0.05;
+    const textPadH = isDevanagari ? 0.35 : 0.05;
 
     const whiteout: WhiteoutElement = {
       id: whiteoutId,
       pageIndex: pageInfo.pageIndex,
       type: 'whiteout',
       x: Math.max(0, item.xPct - 0.15),
-      y: Math.max(0, item.yPct - yOffset),
+      y: Math.max(0, item.yPct - whiteoutPadY),
       width: Math.min(100 - item.xPct + 0.15, item.widthPct + (isDevanagari ? 2.0 : 0.8)),
-      height: Math.min(100 - item.yPct + yOffset, item.heightPct + yOffset + hExtra),
+      height: Math.min(100 - item.yPct + whiteoutPadY, item.heightPct + whiteoutPadY + whiteoutPadH),
       color: '#ffffff',
     };
 
@@ -247,9 +306,9 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       text: item.str,
       runs: runsAlign ? item.runs : undefined,
       x: item.xPct,
-      y: Math.max(0, item.yPct - yOffset),
+      y: Math.max(0, item.yPct - textPadY),
       width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
-      height: item.heightPct + yOffset + hExtra,
+      height: item.heightPct + textPadY + textPadH,
       fontSize: item.fontSize || 14,
       fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
       color: '#000000',
@@ -265,8 +324,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   };
 
   // Handle overlay click to insert elements
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (activeTool === 'select') {
+  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {    if (activeTool === 'select') {
       onSelectElement(null);
       return;
     }
@@ -615,7 +673,32 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                     borderRadius: '2px',
                   }}
                   title="Click to edit text directly"
-                />
+                >
+                  {/* On-demand repair for a single line. Legacy Hindi PDFs
+                      often have a font whose ToUnicode map is wrong in ways no
+                      structural rule can catch (a wrong base consonant), and a
+                      clean page is deliberately never sent to the model. This
+                      gives the user a way to fix one suspect line without
+                      risking the rest of the document. */}
+                  {isDevanagariLine(item) && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRepairLine(item);
+                      }}
+                      title="Re-read this line from the PDF model (fixes garbled Hindi)"
+                      className="absolute -top-6 right-0 flex items-center gap-1 bg-sky-600 text-white text-2xs font-semibold px-1.5 py-0.5 rounded shadow-xs cursor-pointer hover:bg-sky-700 disabled:opacity-60 whitespace-nowrap"
+                      disabled={repairingTextId === item.id}
+                    >
+                      {repairingTextId === item.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <WandSparkles className="w-3 h-3" />
+                      )}
+                      {repairingTextId === item.id ? 'Fixing' : 'Fix text'}
+                    </button>
+                  )}
+                </div>
               ))}
           </div>
         )}

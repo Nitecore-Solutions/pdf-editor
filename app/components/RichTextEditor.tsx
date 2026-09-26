@@ -19,9 +19,9 @@ import {
   clearActiveTextSelection,
   setActiveTextSelection,
 } from '../lib/textSelection';
+import { DEVANAGARI_FONT_STACK } from '../lib/devanagari';
 
-const DEVANAGARI_FALLBACK =
-  '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif';
+const DEVANAGARI_FALLBACK = DEVANAGARI_FONT_STACK;
 
 interface RichTextEditorProps {
   element: TextElement;
@@ -75,14 +75,24 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const runs = useMemo(() => getRuns(element), [element]);
   const sig = useMemo(() => runsSignature(runs), [runs]);
 
-  const fontFamily = useMemo(() => {
-    if (element.fontFamily) return element.fontFamily;
-    return /[\u0900-\u097F]/.test(element.text || '')
-      ? DEVANAGARI_FALLBACK
-      : 'Arial, Helvetica, sans-serif';
-  }, [element.fontFamily, element.text]);
-
   const isDevanagari = /[\u0900-\u097F]/.test(element.text || '');
+
+  const fontFamily = useMemo(() => {
+    if (isDevanagari) {
+      // A family carried over from the PDF is often a name that does not exist
+      // on this machine, and falling back to a Latin-only face is what breaks
+      // conjuncts. Use the curated stack unless the source really is a Latin
+      // family on a mixed line.
+      if (
+        !element.fontFamily ||
+        /nirmala|devanagari|mangal|kohinoor|noto sans/i.test(element.fontFamily)
+      ) {
+        return DEVANAGARI_FONT_STACK;
+      }
+    }
+    if (element.fontFamily) return element.fontFamily;
+    return 'Arial, Helvetica, sans-serif';
+  }, [element.fontFamily, isDevanagari]);
 
   // ---- model -> DOM -------------------------------------------------------
   useEffect(() => {
@@ -322,14 +332,26 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           textDecoration: base.isUnderline ? 'underline' : 'none',
           textAlign: element.align || 'left',
           fontFamily,
-          lineHeight: isDevanagari ? 1.28 : 1.2,
-          letterSpacing: isDevanagari ? '0.01em' : 'normal',
-          wordSpacing: isDevanagari ? '0.05em' : 'normal',
+          // Devanagari needs extra leading for the top matras (े ै ो ौ ं ः) and
+          // the bottom ones (ु ू ृ), otherwise ascenders and the shirorekha get
+          // clipped by the whiteout behind the text.
+          lineHeight: isDevanagari ? 1.45 : 1.2,
+          // Deliberately 'normal'. A previous version applied letterSpacing to
+          // Devanagari, which inserts space between every codepoint pair -
+          // including between a base consonant and its zero-width matra. That
+          // detaches every matra from its base and is what made the edited
+          // Hindi look scattered. The font's own metrics are correct as-is.
+          letterSpacing: 'normal',
+          wordSpacing: 'normal',
+          // Keep the browser's shaper in charge of conjuncts and matra
+          // placement; do not let it re-order or synthesise spacing.
+          fontKerning: 'normal',
+          fontVariantLigatures: 'common-ligatures',
           whiteSpace: 'pre-wrap',
           overflowWrap: 'break-word',
           width: '100%',
           minWidth: '30px',
-          padding: '0 1px',
+          padding: isDevanagari ? '2px 1px' : '0 1px',
         }}
       />
     </>
