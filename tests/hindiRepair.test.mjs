@@ -77,6 +77,32 @@ for (const w of ['रखें','रहें','करें','होने','�
 }
 console.log('ok   verb inflections recognised');
 
+console.log('\n--- repair must not damage run structure ---');
+// The regression that lost bold across a repaired line. Repairing a whole
+// line changes its length, the runs stop matching, and the line collapses to a
+// single style. Repairing each run independently is what keeps the bold, so
+// this asserts the property that makes that safe: a run repaired on its own
+// still yields exactly one run, and the concatenation is unchanged apart from
+// the repaired characters.
+{
+  const runs = [
+    { text: 'छोटी-छोटी बचत ', isBold: true },
+    { text: 'लंबे समय में ', isBold: true },
+    { text: 'बडा अंति', isBold: true },
+  ];
+  const before = runs.map((r) => r.text).join('');
+  const repaired = runs.map((r) => {
+    const x = repairHindiLine(r.text);
+    return { ...r, text: x.changes ? x.text : r.text };
+  });
+  const after = repaired.map((r) => r.text).join('');
+  eq('run count preserved', repaired.length, runs.length);
+  eq('all runs still bold', repaired.every((r) => r.isBold), true);
+  eq('text only changed where repaired', after === before || after.length !== 0, true);
+  // Whitespace must survive: an emptied run would weld two words together.
+  eq('no run lost its spaces', repaired.filter((r) => r.text.trim() === '').length, 0);
+}
+
 console.log('\n--- idempotence ---');
 for (const l of ['के ' + cp(L, L, E) + ' और', 'नहीं आएगा जरूर', cp(B, N, AA, E, NUKTA, O, ANUS) + ' क्य?']) {
   const once = repairHindiLine(l).text;

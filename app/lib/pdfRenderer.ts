@@ -413,27 +413,33 @@ function orderItemsForLogicalText(line: any[]): any[] {
       push(curr.str, !!curr.isBold, !!curr.isItalic);
     }
 
-    // Apply the repairs that are unambiguously correct. If the text shifts, the
-    // run offsets no longer line up, so the line falls back to a uniform style
-    // rather than mis-styling the wrong characters.
-    const repaired = repairDevanagari(fullText.trim());
-    const repairedChanged = repaired.changed;
+    // Apply the unambiguous repairs *per piece* rather than to the joined line.
+    //
+    // Repairing the whole line changed its length, which meant the run offsets
+    // no longer matched and the line fell back to a single uniform style - so
+    // every bold fragment in a repaired Hindi line silently lost its weight.
+    // Repairing each styled segment independently keeps the structure intact
+    // and the bold survives.
+    const repairedPieces = pieces.map((p) => {
+      const r = repairDevanagari(p.text);
+      return r.changed ? { ...p, text: r.text } : p;
+    });
+
+    const lineText = repairedPieces.map((p) => p.text).join('').trim();
+    const devanagariIssues = findDevanagariIssues(lineText);
 
     // Only worth carrying when the line is genuinely mixed.
-    const allBold = pieces.every((p) => p.isBold);
-    const allItalic = pieces.every((p) => p.isItalic);
-    const mixed = !repairedChanged && (!allBold || !allItalic);
+    const allBold = repairedPieces.every((p) => p.isBold);
+    const allItalic = repairedPieces.every((p) => p.isItalic);
+    const mixed = !allBold || !allItalic;
     const lineRuns: TextRun[] | undefined = mixed
-      ? pieces.map((p) => ({
+      ? repairedPieces.map((p) => ({
           text: p.text,
           isBold: p.isBold,
           isItalic: p.isItalic,
           isUnderline: false,
         }))
       : undefined;
-
-    const lineText = repairedChanged ? repaired.text : fullText.trim();
-    const devanagariIssues = findDevanagariIssues(lineText);
 
     const minX = Math.min(...line.map(b => b.xPct));
     const maxX = Math.max(...line.map(b => b.xPct + b.widthPct));

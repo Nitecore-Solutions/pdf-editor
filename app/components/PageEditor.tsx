@@ -178,10 +178,26 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         if (textItems.length > 0) {
           const repairedLines = textItems.map((t) => {
             if (!DEVANAGARI_RANGE.test(t.str)) return t;
+
+            // A line with mixed styling is repaired run by run, so a bold
+            // fragment keeps its weight. Repairing the joined text instead would
+            // change its length, the runs would stop matching, and the whole
+            // line would collapse to a single style.
+            if (t.runs && t.runs.length > 0) {
+              let touched = false;
+              const runs = t.runs.map((r) => {
+                if (!DEVANAGARI_RANGE.test(r.text)) return r;
+                const { text, changes } = repairHindiLine(r.text);
+                if (!changes) return r;
+                touched = true;
+                return { ...r, text };
+              });
+              if (!touched) return t;
+              return { ...t, runs, str: runs.map((r) => r.text).join('') };
+            }
+
             const { text, changes } = repairHindiLine(t.str);
-            if (!changes) return t;
-            // Length changed, so any per-segment runs no longer line up.
-            return { ...t, str: text, runs: undefined };
+            return changes ? { ...t, str: text } : t;
           });
           if (!isCancelled) setExtractedTexts(repairedLines);
         }
