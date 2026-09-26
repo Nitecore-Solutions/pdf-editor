@@ -293,7 +293,17 @@ export const PageEditor: React.FC<PageEditorProps> = ({
   };
 
   // Handle overlay click to insert elements
-  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {    if (activeTool === 'select') {
+  //
+  // In Text mode a single click on empty canvas does NOT create a text box.
+  // It only deselects, exactly as the Select tool does.
+  //
+  // Creating on a single click made every stray click destructive: it dropped an
+  // empty text box on the page, auto-selected it, and RichTextEditor's onBlur
+  // then deleted it again on the next click. The result was a selected empty
+  // box that swallowed the click meant for real text, so the only way out was
+  // the toolbar's Delete. Adding a box is now an explicit double-click.
+  const handleOverlayClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (activeTool === 'select' || activeTool === 'text') {
       onSelectElement(null);
       return;
     }
@@ -308,27 +318,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
     const id = 'el_' + Math.random().toString(36).substr(2, 9);
 
-    if (activeTool === 'text') {
-      const newText: TextElement = {
-        id,
-        pageIndex: pageInfo.pageIndex,
-        type: 'text',
-        text: '',
-        x: xPct,
-        y: yPct,
-        width: 15,
-        height: 2.5,
-        fontSize: 14,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-        color: '#000000',
-        isBold: false,
-        isItalic: false,
-        isUnderline: false,
-        align: 'left',
-      };
-      onAddElement(newText);
-      onSelectElement(id);
-    } else if (activeTool === 'whiteout') {
+    if (activeTool === 'whiteout') {
       const newWhiteout: WhiteoutElement = {
         id,
         pageIndex: pageInfo.pageIndex,
@@ -390,6 +380,47 @@ export const PageEditor: React.FC<PageEditorProps> = ({
         onSelectElement(id);
       }
     }
+  };
+
+  // Adding a brand-new text box is a deliberate act, so it takes a double-click.
+  //
+  // handleOverlayClick has already deselected by the time this fires, so the new
+  // box arrives on a clean slate instead of inheriting the previous selection.
+  const handleOverlayDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (activeTool !== 'text') return;
+    if (!containerRef.current) return;
+    // Only bare page counts. Existing text stops propagation on click, but
+    // dblclick is a separate event and would still bubble up from the text box
+    // or the detection layer - so double-clicking a line would convert it and
+    // then also drop an empty box on top of it. Both interactive layers are
+    // pointer-events-none wrappers, so anything they own arrives as a different
+    // target than the page itself.
+    if (e.target !== e.currentTarget) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const xPct = Math.max(0, Math.min(95, ((e.clientX - rect.left) / displayedWidth) * 100));
+    const yPct = Math.max(0, Math.min(95, ((e.clientY - rect.top) / displayedHeight) * 100));
+
+    const id = 'el_' + Math.random().toString(36).substr(2, 9);
+    const newText: TextElement = {
+      id,
+      pageIndex: pageInfo.pageIndex,
+      type: 'text',
+      text: '',
+      x: xPct,
+      y: yPct,
+      width: 15,
+      height: 2.5,
+      fontSize: 14,
+      fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+      color: '#000000',
+      isBold: false,
+      isItalic: false,
+      isUnderline: false,
+      align: 'left',
+    };
+    onAddElement(newText);
+    onSelectElement(id);
   };
 
   // Freehand Drawing pointer handlers
@@ -579,6 +610,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       <div
         ref={containerRef}
         onClick={handleOverlayClick}
+        onDoubleClick={handleOverlayDoubleClick}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

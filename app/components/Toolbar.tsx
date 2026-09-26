@@ -289,6 +289,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       {/* Subtool Options Bar (Always visible & fully clickable when Forms, Annotate, or Shapes is selected) */}
+      {activeTool === 'text' && (
+        <div className="bg-emerald-50/60 border-t border-emerald-100 px-3 py-1.5 flex items-center justify-center gap-3 text-xs overflow-x-auto no-scrollbar animate-in fade-in">
+          <span className="text-emerald-900 shrink-0">
+            <span className="font-semibold">Click</span> existing text to edit it
+          </span>
+          <span className="text-emerald-400 shrink-0">|</span>
+          <span className="text-emerald-900 shrink-0">
+            <span className="font-semibold">Double-click</span> empty space for a new box
+          </span>
+        </div>
+      )}
+
       {activeTool === 'forms' && (
         <div className="bg-emerald-50/60 border-t border-emerald-100 px-3 py-1.5 flex items-center justify-center space-x-2 text-xs overflow-x-auto no-scrollbar animate-in fade-in">
           <span className="text-emerald-800 font-bold text-2xs uppercase tracking-wider shrink-0">Form Type:</span>
