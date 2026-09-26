@@ -78,18 +78,19 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const isDevanagari = /[\u0900-\u097F]/.test(element.text || '');
 
   const fontFamily = useMemo(() => {
-    if (isDevanagari) {
-      // A family carried over from the PDF is often a name that does not exist
-      // on this machine, and falling back to a Latin-only face is what breaks
-      // conjuncts. Use the curated stack unless the source really is a Latin
-      // family on a mixed line.
-      if (
-        !element.fontFamily ||
-        /nirmala|devanagari|mangal|kohinoor|noto sans/i.test(element.fontFamily)
-      ) {
-        return DEVANAGARI_FONT_STACK;
-      }
-    }
+    // Any line containing Devanagari is rendered with the Devanagari stack,
+    // regardless of what family the PDF reported.
+    //
+    // The previous version only swapped when the PDF's family looked like a
+    // Devanagari face. That missed the common case entirely: legacy Hindi PDFs
+    // report "Times New Roman" or "Arial" for their Devanagari runs, so a
+    // serif face with no Devanagari coverage was used. The browser then fell
+    // back glyph by glyph, and the pre-base matra was drawn detached from its
+    // consonant - "लिए" rendered as "हिए".
+    //
+    // The stack ends in Latin families, so the English words on the same line
+    // are still handled.
+    if (isDevanagari) return DEVANAGARI_FONT_STACK;
     if (element.fontFamily) return element.fontFamily;
     return 'Arial, Helvetica, sans-serif';
   }, [element.fontFamily, isDevanagari]);

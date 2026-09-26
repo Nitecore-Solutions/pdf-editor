@@ -368,6 +368,19 @@ const LEXICON = new Set<string>([
   // Doubled-vowel-sign forms seen in sample3. Once the duplicate is removed
   // these reduce to the plain word, which the matcher can then reach.
   'औरों', 'चीजों', 'औरोँ', 'चीज़ें', 'चीजें', 'औरं',
+  // High-frequency words whose corrupted forms appear in sample2. Adding the
+  // correct spelling is enough: the fuzzy matcher can then reach it, because
+  // these differ from the broken form by one or two substitutions.
+  'यदि', 'किए', 'किये', 'संभव', 'सोंभव', 'बड़ा', 'बडा', 'महत्वपूर्ण',
+  'महत्त्वपूर्ण', 'महत्वपूणच', 'उपकरण', 'उपकण', 'उपकिण', 'बंद', 'बोंद',
+  'रखना', 'रखने', 'रखना', 'सामान्यतः', 'सामान्य', 'निर्धारित', 'निर्धारण',
+  'खरीद', 'खरीदना', 'खरीदने', 'अलग', 'आवश्यकता', 'आवश्यक', 'बजाय',
+  'लाभ', 'हानि', 'वास्तव', 'ध्यान', 'कार्यक्रम', 'सफल', 'अनुभव', 'जमा',
+  'आमदनी', 'व्यय', 'बिल', 'किराया', 'ब्याज', 'EMI', 'लेना', 'देना',
+  'आदत', 'आदतें', 'सुधार', 'बदलाव', 'शुरुआत', 'अंत', 'अन्त', 'लक्ष्य',
+  'उद्देश्य', 'महत्व', 'आवश्यकताएं', 'कठिनाई', 'सुविधा', 'समस्या',
+  'उपलब्ध', 'चुनौती', 'अवसर', 'कौशल', 'अनुभवी', 'प्रशिक्षण', 'प्रमाण',
+  'सत्यापन', 'परीक्षण', 'गुणवत्ता', 'विश्वसनीय', 'विश्वास', 'आश्वासन',
   'दिखाएं', 'दिखाए', 'दिखाया', 'चुकी', 'चुके', 'चुका', 'रही', 'रहा', 'रहे',
   'सकता', 'सकते', 'सकती', 'भीमा', 'सीमा', 'प्रीमियम', 'खेल', 'खेलना',
   // Words that sit one matra away from a common function word. These must be
@@ -439,6 +452,15 @@ const STRIPPABLE = [
  * simply refuses any shortening, and lets the structural pass handle matra
  * removal before this is ever consulted.
  */
+/** Does `ch` appear twice in a row in `s`, ignoring any matras between? */
+function hasAdjacentDuplicate(s: string, ch: string): boolean {
+  const chars = [...s].filter((c) => isConsonant(c));
+  for (let i = 1; i < chars.length; i++) {
+    if (chars[i] === ch && chars[i - 1] === ch) return true;
+  }
+  return false;
+}
+
 function losesCharacters(original: string, repaired: string): boolean {
   const consonantsOf = (s: string) =>
     [...s].filter((ch) => isConsonant(ch)).sort().join('');
@@ -447,19 +469,48 @@ function losesCharacters(original: string, repaired: string): boolean {
   const after = consonantsOf(repaired);
   if (!before) return false;
 
-  // A consonant disappeared. Substituting one for another is legitimate: the
-  // corruption routinely turns a matra into a bare consonant, so the repair
-  // trades one for the other (ललए -> लिए is ल + ल -> ल + ि, which drops one
-  // consonant while adding a matra). What is forbidden is a consonant the
-  // result does not have at all, so this compares the *sets* rather than the
-  // counts.
-  for (const ch of before) {
-    if (!after.includes(ch)) return true;
+  // A consonant disappeared. Dropping an *adjacent duplicate* is legitimate -
+  // these fonts repeat a glyph, and खर्चच -> खर्च is a repair, not a loss. Any
+  // other consonant must survive.
+  const counts = (s: string) => {
+    const m = new Map<string, number>();
+    for (const ch of s) m.set(ch, (m.get(ch) ?? 0) + 1);
+    return m;
+  };
+  const beforeCounts = counts(before);
+  const afterCounts = counts(after);
+  for (const [ch, n] of beforeCounts) {
+    const kept = afterCounts.get(ch) ?? 0;
+    if (kept === n) continue;
+    if (kept < n - 1) return true;
+    // A single extra occurrence may be dropped, but only if the original really
+    // had it adjacent, which is what identifies a duplicated glyph.
+    if (n >= 2 && !hasAdjacentDuplicate(original, ch)) return true;
   }
 
-  // Losing a matra is forbidden, gaining one is not - putting back a missing
-  // ि is the single most common repair there is.
-  if ([...repaired].length < [...original].length) return true;
+  // Losing characters is forbidden, with one exception: dropping a duplicated
+  // glyph shortens the word and is exactly the repair we want (खर्चच -> खर्च).
+  // The count was already checked above, so this only fires when a matra went
+  // missing as well.
+  if ([...repaired].length < [...original].length) {
+    const dropped = [...original].length - [...repaired].length;
+    if (dropped > 1) return true;
+    if (!(after.length < before.length)) return true;
+  }
+
+  // No invented consonants. This is the rule that matters, and it is what
+  // separates a repair from a guess:
+  //
+  //   ललए  -> लिए     after {ल}  is a subset of before {ल, ल}   allowed
+  //   खर्चच -> खर्च    after {ख,र,च} subset of {ख,र,च,च}      allowed
+  //   बढाएं -> बडाएं   after has ड, which the original never had  blocked
+  //
+  // The last one matters because the two spellings are the same length, so no
+  // length or count check catches it, and the word was never broken to begin
+  // with. Substituting a consonant is exactly the guess we refuse to make.
+  for (const ch of new Set(after)) {
+    if (!before.includes(ch)) return true;
+  }
 
   return false;
 }
