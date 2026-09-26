@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { callGeminiJson } from '../../lib/llm';
 
 /**
  * /api/verify-text
@@ -19,23 +20,19 @@ import { NextRequest, NextResponse } from 'next/server';
  * (two consonants, structurally valid) where the word is "लिए".
  */
 
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+const PROMPT = `You are a Hindi (Devanagari) spelling checker for text extracted from a PDF whose font has a broken character map.
 
-const PROMPT = `You are a strict Hindi (Devanagari) orthography checker.
+You get a list of individual words. Return a JSON object that maps ONLY the wrong words to their correct spelling.
 
-I extracted words from a Hindi PDF. Some are correct, some are misspelled because the PDF's font has a broken character map.
+Rules:
+- Omit any word that is already spelled correctly. An omitted word means "leave it alone".
+- Where more than one spelling is in common use, normalise to the standard modern Hindi spelling. For example "बनायें" and "बनाये" become "बनाएं" and "बनाए", and "बढ़ायें"/"बढ़ाये" become "बढ़ाएं"/"बढ़ाए".
+- Fix words whose consonants or matras were mangled by the font, e.g. "रलए", "ललए" and "हलए" all become "लिए".
+- Do NOT translate, do NOT change meaning, do NOT modernise grammar, and do NOT alter proper nouns, place names or numbers.
+- Keep Devanagari script.
+- This is a spelling fix only. Never rewrite a word that is already valid.
 
-For each word:
-- If it is a CORRECTLY spelled Hindi word, OMIT it from the output.
-- If it is MISSPELLED, output the correct spelling.
-- Keep the word's meaning, length class and grammatical role. This is a spelling fix, not a rewrite.
-- NEVER "correct" a word that is already valid, even if you would phrase it differently. Infinitive, polite and colloquial forms are all valid Hindi.
-- NEVER change proper nouns, place names, brand names, or English words written in Latin script.
-- NEVER translate. Keep Devanagari script.
-
-Return ONLY a flat JSON object mapping the misspelled input word to its correction.
-Words that need no change must be absent. Example:
-{"ललए":"लिए","बढ़ाएों":"बढ़ाएं"}
+Output example: {"रलए":"लिए","बनायें":"बनाएं"}
 
 Words: `;
 
@@ -53,7 +50,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, corrections: {} });
     }
 
-    const geminiKey = process.env.GEMINI_API_KEY;
     const groqKey = process.env.GROQ_API_KEY;
 
     const sanitise = (raw: unknown): Record<string, string> => {
@@ -97,43 +93,35 @@ export async function POST(req: NextRequest) {
         if (res.ok) {
           const data = await res.json();
           const parsed = JSON.parse(data?.choices?.[0]?.message?.content || '{}');
-          return NextResponse.json({ success: true, corrections: sanitise(parsed) });
+          return NextResponse.json({ success: true, corrections: sanitise(parsed), model: 'groq' });
         }
+        console.warn(`verify-text: groq HTTP ${res.status}`);
       } catch (err) {
         console.warn('verify-text: groq failed:', err);
       }
     }
 
-    if (geminiKey) {
-      for (const model of GEMINI_MODELS) {
-        try {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: PROMPT + JSON.stringify(unique) }] }],
-                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-              }),
-            }
-          );
-          if (!response.ok) continue;
-          const data = await response.json();
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!text) continue;
-          return NextResponse.json({ success: true, corrections: sanitise(JSON.parse(text)) });
-        } catch (err) {
-          console.warn(`verify-text: ${model} failed:`, err);
-        }
-      }
+    const result = await callGeminiJson(PROMPT + JSON.stringify(unique));
+    if (result.ok) {
+      return NextResponse.json({
+        success: true,
+        corrections: sanitise(result.data),
+        model: result.model,
+      });
     }
 
-    // No provider available. Returning an empty map is the safe outcome: the
-    // caller leaves the text exactly as extracted.
-    return NextResponse.json({ success: true, corrections: {} });
+    // Report the failure instead of pretending the text was clean. An empty map
+    // with success:true is indistinguishable from "nothing needed fixing",
+    // which is exactly how a dead model list went unnoticed.
+    console.error('verify-text: no provider available:', result.error);
+    return NextResponse.json({
+      success: false,
+      corrections: {},
+      checked: unique.length,
+      degraded: result.error,
+    });
   } catch (error) {
     console.error('verify-text error:', error);
-    return NextResponse.json({ success: true, corrections: {} });
+    return NextResponse.json({ success: false, corrections: {}, degraded: String(error) });
   }
 }

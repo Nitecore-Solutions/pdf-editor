@@ -193,6 +193,13 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                 signal: AbortSignal.timeout(45_000),
               });
               const data = res.ok ? await res.json() : null;
+              // A dead model list or a rate-limited provider must not look the
+              // same as "nothing needed fixing", so the reason is surfaced.
+              if (data && data.success === false) {
+                console.warn(
+                  `[verify-text] Hindi spell check unavailable, leaving text as extracted: ${data.degraded}`
+                );
+              }
               const corrections: Record<string, string> | undefined = data?.corrections;
               if (!isCancelled && corrections && Object.keys(corrections).length > 0) {
                 setExtractedTexts((prev) =>

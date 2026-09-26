@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { callGeminiJson } from '../../lib/llm';
 
 /**
  * Built-in multi-profile Indian font decoder as instant fallback.
@@ -236,49 +237,27 @@ CRITICAL RULES:
   { "index": 1, "text": "..." }
 ]`;
 
-      // Try fast models in order of availability
-      const candidateModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
-      for (const model of candidateModels) {
-        try {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                generationConfig: {
-                  temperature: 0.1,
-                  responseMimeType: 'application/json',
-                },
-              }),
-            }
-          );
-
-          if (response.ok) {
-            const data = await response.json();
-            const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (candidateText) {
-              const parsed = JSON.parse(candidateText);
-              const correctedMap = new Map<number, string>();
-              if (Array.isArray(parsed)) {
-                for (const item of parsed) {
-                  if (typeof item.index === 'number' && typeof item.text === 'string') {
-                    correctedMap.set(item.index, item.text);
-                  }
-                }
-              }
-              const outputLines = lines.map((l: any, i: number) => ({
-                ...l,
-                str: correctedMap.get(i) || localDecodeFallback(l.str),
-              }));
-              return NextResponse.json({ success: true, lines: outputLines });
+      // Model names are resolved in lib/llm.ts, newest first. The previously
+      // hardcoded gemini-2.0-flash / gemini-1.5-flash IDs now return 404, which
+      // meant this block silently did nothing for every page.
+      const result = await callGeminiJson(prompt);
+      if (result.ok) {
+        const parsed = result.data;
+        const correctedMap = new Map<number, string>();
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (typeof item.index === 'number' && typeof item.text === 'string') {
+              correctedMap.set(item.index, item.text);
             }
           }
-        } catch (err) {
-          console.warn(`Model ${model} failed, trying next fallback:`, err);
         }
+        const outputLines = lines.map((l: any, i: number) => ({
+          ...l,
+          str: correctedMap.get(i) || localDecodeFallback(l.str),
+        }));
+        return NextResponse.json({ success: true, lines: outputLines, model: result.model });
       }
+      console.error('OCR route: no Gemini model available:', result.error);
     }
 
     // 3. Fallback: Local instant decoder (ensures zero broken words even when offline/rate-limited)

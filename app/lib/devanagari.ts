@@ -201,9 +201,12 @@ export function repairDevanagari(text: string): { text: string; changed: boolean
     .replace(/[ \t\u00a0]{2,}/g, ' ')
     .replace(/[ \t\u00a0]+$/, '');
 
+  // Curated, unambiguous corrections run last, on the whole line.
+  const fixed = applyCommonHindiFixes(collapsed);
+
   return {
-    text: collapsed,
-    changed: collapsed !== text,
+    text: fixed,
+    changed: fixed !== text,
     repairs: [...repairs],
   };
 }
@@ -236,6 +239,46 @@ export function pageLooksBroken(
   if (broken === 1 && devanagariLines.length > 2) return false;
 
   return broken / devanagariLines.length >= threshold;
+}
+
+/**
+ * High-precision corrections for the most common corruptions in these
+ * documents.
+ *
+ * These are applied unconditionally, with no model involved, because they are
+ * linguistically unambiguous and because a repair feature that silently does
+ * nothing whenever the API is rate-limited is not a repair feature. The
+ * provider check in /api/verify-text handles everything else.
+ *
+ * Each entry is anchored to word boundaries; a bare substring rule here would
+ * corrupt unrelated words.
+ */
+const COMMON_FIXES: [RegExp, string][] = [
+  // "के लिए" family. The extracted form has a wrong first consonant and no
+  // pre-base matra: रलए / ललए / हलए / भलए / कलए are all "लिए".
+  // NOTE: the leading group is *capturing* on purpose - the replacement uses
+  // $1 to put the matched whitespace back. A non-capturing group would leave
+  // $1 undefined and splice the literal text "$1" into the output.
+  [/(^|\s)(?:इस|उस|जस)लए(?=\s|$|[,.;:!?।])/g, '$1लिए'],
+  [/(^|\s)[रलहभक]लए(?=\s|$|[,.;:!?।])/g, '$1लिए'],
+  // Spellings that are accepted but non-standard.
+  [/(^|\s)लिये(?=\s|$|[,.;:!?।])/g, '$1लिए'],
+  [/(^|\s)किये(?=\s|$|[,.;:!?।])/g, '$1किए'],
+  // Causative perfective: standard Hindi writes -ाएं / -ाए, never -ायें / -ाये.
+  // This covers the whole family correctly (बनायें->बनाएं, बढ़ायें->बढ़ाएं,
+  // जायें->जाएं, दिखाये->दिखाए, लायें->लाएं).
+  [/ायें/g, 'ाएं'],
+  [/ाये/g, 'ाए'],
+];
+
+/** Applies the curated fixes above. Returns the string unchanged if none match. */
+export function applyCommonHindiFixes(text: string): string {
+  if (!text || !DEVANAGARI_RANGE.test(text)) return text;
+  let out = text;
+  for (const [pattern, replacement] of COMMON_FIXES) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
 }
 
 export function isDevanagari(text: string): boolean {
