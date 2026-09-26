@@ -1,4 +1,7 @@
 // Robust client-side PDF.js loader with isolated offscreen canvas rendering
+import { resolveFontStyles } from './fontStyles';
+import type { TextRun } from '../types/editor';
+
 let pdfjsLibInstance: any = null;
 
 let cachedDocBytes: Uint8Array | null = null;
@@ -112,6 +115,11 @@ export interface ExtractedTextItem {
   fontFamily: string;
   isBold?: boolean;
   isItalic?: boolean;
+  /**
+   * Per-segment styling, present only when the line mixes bold/regular text.
+   * Concatenating the run texts reproduces `str`.
+   */
+  runs?: TextRun[];
   baselinePct?: number;
 }
 
@@ -130,7 +138,15 @@ export async function extractPageTextItems(
   const textContent = await page.getTextContent();
   const rawItems = textContent.items as any[];
   const styles = (textContent.styles || {}) as Record<string, any>;
-  
+
+  // Resolve real bold/italic/family from the embedded font programs. Font
+  // resource names are frequently opaque (g_d0_f1) and carry no style
+  // information, so matching on `fontName` alone silently loses boldness.
+  const usedFontNames = [
+    ...new Set(rawItems.filter((it: any) => it.fontName).map((it: any) => it.fontName as string)),
+  ];
+  const resolvedFonts = await resolveFontStyles(page, usedFontNames);
+
   const extracted: ExtractedTextItem[] = [];
 
   for (let i = 0; i < rawItems.length; i++) {
@@ -164,54 +180,69 @@ export async function extractPageTextItems(
     const fontStyleObj = styles[item.fontName] || {};
     const fontNameLower = (item.fontName || '').toLowerCase();
     const styleFontFamily = (fontStyleObj.fontFamily || '').toLowerCase();
+    const resolved = resolvedFonts.get(item.fontName);
 
-    // Detect Bold
+    // Detect Bold. Prefer the font program's OS/2 weight/fsSelection bits, fall
+    // back to the original PostScript name, and only then to the name heuristic.
     const rawFontWeight = (fontStyleObj as any).fontWeight;
     const fontWeightNum = typeof rawFontWeight === 'number' ? rawFontWeight : (typeof rawFontWeight === 'string' ? parseInt(rawFontWeight, 10) : NaN);
-    const isBold = 
-      fontNameLower.includes('bold') || 
-      fontNameLower.includes('black') || 
-      fontNameLower.includes('heavy') || 
-      fontNameLower.includes('semibold') || 
-      fontNameLower.includes('medium') ||
+    const nameSaysBold =
+      fontNameLower.includes('bold') ||
+      fontNameLower.includes('black') ||
+      fontNameLower.includes('heavy') ||
+      fontNameLower.includes('semibold') ||
       (styleFontFamily.includes('bold') && !styleFontFamily.includes('regular')) ||
       rawFontWeight === 'bold' ||
       (!isNaN(fontWeightNum) && fontWeightNum >= 600);
 
+    const isBold = resolved ? resolved.isBold || nameSaysBold : nameSaysBold;
+
     // Detect Italic
-    const isItalic = 
-      fontNameLower.includes('italic') || 
-      fontNameLower.includes('oblique') || 
+    const nameSaysItalic =
+      fontNameLower.includes('italic') ||
+      fontNameLower.includes('oblique') ||
       fontNameLower.includes('slant') ||
       styleFontFamily.includes('italic');
 
+    const isItalic = resolved ? resolved.isItalic || nameSaysItalic : nameSaysItalic;
+
+    // The resource name is often opaque (g_d0_f1), so fold the real family and
+    // PostScript name recovered from the font program into the haystack the
+    // family heuristics below match against.
+    const nameHaystack =
+      `${fontNameLower} ${resolved?.family || ''} ${resolved?.postScriptName || ''}`.toLowerCase();
+
     // Determine font family accurately using specific font name matching
     const isMonospace = 
-      fontNameLower.includes('courier') || 
-      fontNameLower.includes('mono') || 
-      fontNameLower.includes('consolas') || 
+      nameHaystack.includes('courier') || 
+      nameHaystack.includes('mono') || 
+      nameHaystack.includes('consolas') ||
       styleFontFamily.includes('monospace');
 
-    const isArial = fontNameLower.includes('arial') || styleFontFamily.includes('arial');
-    const isHelvetica = fontNameLower.includes('helvetica') || styleFontFamily.includes('helvetica');
-    const isCalibri = fontNameLower.includes('calibri') || styleFontFamily.includes('calibri');
-    const isTahoma = fontNameLower.includes('tahoma') || styleFontFamily.includes('tahoma');
-    const isVerdana = fontNameLower.includes('verdana') || styleFontFamily.includes('verdana');
-    const isTrebuchet = fontNameLower.includes('trebuchet') || styleFontFamily.includes('trebuchet');
-    const isGaramond = fontNameLower.includes('garamond') || styleFontFamily.includes('garamond');
-    const isCambria = fontNameLower.includes('cambria') || styleFontFamily.includes('cambria');
-    const isGeorgia = fontNameLower.includes('georgia') || styleFontFamily.includes('georgia');
-    const isTimes = fontNameLower.includes('times') || styleFontFamily.includes('times');
-    const isPalatinoOrBook = fontNameLower.includes('palatino') || fontNameLower.includes('book antiqua');
+    const isArial = nameHaystack.includes('arial') || styleFontFamily.includes('arial');
+    const isHelvetica = nameHaystack.includes('helvetica') || styleFontFamily.includes('helvetica');
+    const isCalibri = nameHaystack.includes('calibri') || styleFontFamily.includes('calibri');
+    const isTahoma = nameHaystack.includes('tahoma') || styleFontFamily.includes('tahoma');
+    const isVerdana = nameHaystack.includes('verdana') || styleFontFamily.includes('verdana');
+    const isTrebuchet = nameHaystack.includes('trebuchet') || styleFontFamily.includes('trebuchet');
+    const isGaramond = nameHaystack.includes('garamond') || styleFontFamily.includes('garamond');
+    const isCambria = nameHaystack.includes('cambria') || styleFontFamily.includes('cambria');
+    const isGeorgia = nameHaystack.includes('georgia') || styleFontFamily.includes('georgia');
+    const isTimes = nameHaystack.includes('times') || styleFontFamily.includes('times');
+    const isPalatinoOrBook = nameHaystack.includes('palatino') || nameHaystack.includes('book antiqua');
+    // Windows Devanagari UI font; the original documents rely on it heavily.
+    const isNirmalaUI = nameHaystack.includes('nirmala ui') || nameHaystack.includes('nirmalui');
 
     const isSerif = 
-      !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet &&
+      !isMonospace && !isArial && !isHelvetica && !isCalibri && !isTahoma && !isVerdana && !isTrebuchet && !isNirmalaUI &&
       (isTimes || isGaramond || isCambria || isGeorgia || isPalatinoOrBook ||
-       fontNameLower.includes('roman') ||
+       nameHaystack.includes('roman') ||
        (styleFontFamily.includes('serif') && !styleFontFamily.includes('sans')));
 
     let fontFamily: string;
-    if (isMonospace) {
+    if (isNirmalaUI) {
+      fontFamily = '"Nirmala UI", "Noto Sans Devanagari", "Mangal", sans-serif';
+    } else if (isMonospace) {
       fontFamily = '"Courier New", Courier, monospace';
     } else if (isArial) {
       fontFamily = 'Arial, "Liberation Sans", Helvetica, sans-serif';
@@ -289,15 +320,48 @@ export async function extractPageTextItems(
   const merged: ExtractedTextItem[] = lines.map((line, idx) => {
     line.sort((a, b) => a.xPct - b.xPct);
 
+    // Track styling per segment rather than collapsing the line to a single
+    // flag. A line like "Date: 20 August 2026" followed by a bold name stays
+    // partially bold, which is what the source document actually looks like.
+    type Piece = { text: string; isBold: boolean; isItalic: boolean };
+    const pieces: Piece[] = [];
+    const push = (text: string, isBold: boolean, isItalic: boolean) => {
+      if (!text) return;
+      const last = pieces[pieces.length - 1];
+      if (last && last.isBold === isBold && last.isItalic === isItalic) last.text += text;
+      else pieces.push({ text, isBold, isItalic });
+    };
+
     let fullText = line[0].str;
+    push(line[0].str, !!line[0].isBold, !!line[0].isItalic);
+
     for (let i = 1; i < line.length; i++) {
       const prev = line[i - 1];
       const curr = line[i];
       const gap = curr.xPct - (prev.xPct + prev.widthPct);
       const isCombining = /^[\u0901-\u0903\u093C\u093E-\u094F\u0951-\u0957\u0962\u0963]/.test(curr.str);
       const needsSpace = !isCombining && gap > 0.1 && !fullText.endsWith(' ') && !curr.str.startsWith(' ');
-      fullText += (needsSpace ? ' ' : '') + curr.str;
+      if (needsSpace) {
+        fullText += ' ';
+        // The separating space belongs to the preceding run visually.
+        push(' ', !!prev.isBold, !!prev.isItalic);
+      }
+      fullText += curr.str;
+      push(curr.str, !!curr.isBold, !!curr.isItalic);
     }
+
+    // Only worth carrying when the line is genuinely mixed.
+    const allBold = pieces.every((p) => p.isBold);
+    const allItalic = pieces.every((p) => p.isItalic);
+    const mixed = !allBold || !allItalic;
+    const lineRuns: TextRun[] | undefined = mixed
+      ? pieces.map((p) => ({
+          text: p.text,
+          isBold: p.isBold,
+          isItalic: p.isItalic,
+          isUnderline: false,
+        }))
+      : undefined;
 
     const minX = Math.min(...line.map(b => b.xPct));
     const maxX = Math.max(...line.map(b => b.xPct + b.widthPct));
@@ -313,8 +377,9 @@ export async function extractPageTextItems(
       heightPct: maxY - minY,
       fontSize: line[0].fontSize,
       fontFamily: line[0].fontFamily,
-      isBold: line.some((item: any) => item.isBold),
-      isItalic: line.some((item: any) => item.isItalic),
+      isBold: allBold,
+      isItalic: allItalic,
+      runs: lineRuns,
     };
   });
 

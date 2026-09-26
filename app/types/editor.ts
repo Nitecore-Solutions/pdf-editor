@@ -23,9 +23,32 @@ export interface BaseElement {
   rotation?: number;
 }
 
+/**
+ * A contiguous slice of a text element carrying its own character styling.
+ * This is what makes range-scoped formatting possible: instead of one
+ * `isBold` flag per element, bold/italic/underline/colour are stored per run.
+ */
+export interface TextRun {
+  text: string;
+  isBold?: boolean;
+  isItalic?: boolean;
+  isUnderline?: boolean;
+  color?: string; // hex; falls back to the element's base color
+}
+
 export interface TextElement extends BaseElement {
   type: 'text';
+  /**
+   * Plain-text mirror of `runs`. Kept in sync so that legacy consumers
+   * (search, OCR comparison, the whiteout flow) keep working unchanged.
+   */
   text: string;
+  /**
+   * Optional rich-text runs. When absent the element is uniformly styled and
+   * the base fields below apply to the whole thing. When present each run
+   * overrides the base fields for its own characters.
+   */
+  runs?: TextRun[];
   fontSize: number; // px
   fontFamily: string;
   color: string;

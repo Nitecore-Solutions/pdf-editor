@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   Type, 
   Link as LinkIcon, 
@@ -16,8 +16,9 @@ import {
   Undo2, 
   Redo2, 
   ChevronDown, 
-  Bold, 
-  Italic, 
+  Bold,
+  Italic,
+  Underline,
   Trash2,
   Copy,
   ExternalLink
@@ -33,6 +34,12 @@ import {
   FormElement,
   LinkElement
 } from '../types/editor';
+import {
+  ActiveTextSelection,
+  formatActiveTextSelection,
+  subscribeTextSelection,
+} from '../lib/textSelection';
+import { applyStyleToAll, baseStyleOf, compactIfUniform, getRuns } from '../lib/richText';
 
 interface ToolbarProps {
   activeTool: ToolType;
@@ -76,6 +83,62 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onDuplicateSelectedElement,
 }) => {
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  // Live caret/selection inside whichever text box is focused. This is what
+  // lets the same Bold button mean "bold these two words" or "bold the whole
+  // box" depending on context, the way Canva/Docs behave.
+  const [textSelection, setTextSelection] = useState<ActiveTextSelection | null>(null);
+
+  useEffect(() => subscribeTextSelection(setTextSelection), []);
+
+  const textEl = selectedElement?.type === 'text' ? (selectedElement as TextElement) : null;
+  const rangeBelongsToSelection = !!textEl && textSelection?.elementId === textEl.id;
+  const hasTextRange = rangeBelongsToSelection && !!textSelection && !textSelection.isCollapsed;
+  // `style` is null when the range spans mixed formatting, which is what shows
+  // the button as inactive rather than lying about the state.
+  const textRangeStyle = rangeBelongsToSelection ? textSelection?.style ?? null : null;
+
+  const currentBold = textRangeStyle ? !!textRangeStyle.isBold : !!textEl?.isBold;
+  const currentItalic = textRangeStyle ? !!textRangeStyle.isItalic : !!textEl?.isItalic;
+  const currentUnderline = textRangeStyle ? !!textRangeStyle.isUnderline : !!textEl?.isUnderline;
+  const currentColor = textRangeStyle?.color || textEl?.color || '#000000';
+
+  /**
+   * Fallback used when nothing (or only a caret) is selected: apply the patch to
+   * the entire element. Existing runs are rewritten so a rich element stays
+   * consistent instead of half-updating only its base fields.
+   */
+  const applyToWholeElement = (patch: Partial<TextElement>) => {
+    if (!textEl) return;
+    const isStyleOnly =
+      patch.isBold !== undefined ||
+      patch.isItalic !== undefined ||
+      patch.isUnderline !== undefined ||
+      patch.color !== undefined;
+    if (!isStyleOnly) {
+      onUpdateSelectedElement(patch);
+      return;
+    }
+    const base = { ...baseStyleOf(textEl), ...patch };
+    const compacted = compactIfUniform(
+      applyStyleToAll(getRuns(textEl), {
+        isBold: base.isBold,
+        isItalic: base.isItalic,
+        isUnderline: base.isUnderline,
+        color: base.color,
+      }),
+      base
+    );
+    onUpdateSelectedElement({ ...base, color: base.color, text: compacted.text, runs: compacted.runs });
+  };
+
+  /**
+   * Keep focus (and therefore the live selection) inside the text box when the
+   * style buttons are pressed. Without this, mousedown blurs the contenteditable
+   * and the selection is gone by the time onClick runs, so the button would
+   * silently fall back to bolding the entire element.
+   */
+  const keepTextFocus = (e: React.MouseEvent) => e.preventDefault();
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -363,37 +426,62 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 </select>
               </div>
 
-              {/* Bold / Italic */}
+              {/* Bold / Italic / Underline — target the live selection when the
+                  caret sits inside a text box, otherwise the whole element. */}
               <div className="flex items-center space-x-0.5 bg-gray-100 p-0.5 rounded border border-gray-200 shrink-0">
                 <button
-                  onClick={() =>
-                    onUpdateSelectedElement({
-                      isBold: !(selectedElement as TextElement).isBold,
-                    })
-                  }
+                  onMouseDown={keepTextFocus}
+                  onClick={() => {
+                    const next = !currentBold;
+                    if (!formatActiveTextSelection({ isBold: next })) {
+                      applyToWholeElement({ isBold: next });
+                    }
+                  }}
                   className={`p-1 rounded transition cursor-pointer ${
-                    (selectedElement as TextElement).isBold
+                    currentBold
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                   aria-label="Bold"
+                  title={hasTextRange ? 'Bold the selected text' : 'Bold all text in this box'}
                 >
                   <Bold className="w-3.5 h-3.5" />
                 </button>
                 <button
-                  onClick={() =>
-                    onUpdateSelectedElement({
-                      isItalic: !(selectedElement as TextElement).isItalic,
-                    })
-                  }
+                  onMouseDown={keepTextFocus}
+                  onClick={() => {
+                    const next = !currentItalic;
+                    if (!formatActiveTextSelection({ isItalic: next })) {
+                      applyToWholeElement({ isItalic: next });
+                    }
+                  }}
                   className={`p-1 rounded transition cursor-pointer ${
-                    (selectedElement as TextElement).isItalic
+                    currentItalic
                       ? 'bg-white text-emerald-600 shadow-2xs font-bold'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                   aria-label="Italic"
+                  title={hasTextRange ? 'Italicise the selected text' : 'Italicise all text in this box'}
                 >
                   <Italic className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onMouseDown={keepTextFocus}
+                  onClick={() => {
+                    const next = !currentUnderline;
+                    if (!formatActiveTextSelection({ isUnderline: next })) {
+                      applyToWholeElement({ isUnderline: next });
+                    }
+                  }}
+                  className={`p-1 rounded transition cursor-pointer ${
+                    currentUnderline
+                      ? 'bg-white text-emerald-600 shadow-2xs font-bold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  aria-label="Underline"
+                  title={hasTextRange ? 'Underline the selected text' : 'Underline all text in this box'}
+                >
+                  <Underline className="w-3.5 h-3.5" />
                 </button>
               </div>
 
@@ -401,14 +489,19 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <div className="flex items-center space-x-1.5 pl-1 shrink-0">
                 <span className="text-gray-500 text-xs">Color:</span>
                 <label
+                  onMouseDown={keepTextFocus}
                   className="w-6 h-6 rounded border-2 border-gray-300 cursor-pointer overflow-hidden block shadow-xs hover:border-emerald-400 transition"
-                  style={{ backgroundColor: (selectedElement as TextElement).color || '#000000' }}
-                  title="Pick text color"
+                  style={{ backgroundColor: currentColor }}
+                  title={hasTextRange ? 'Colour the selected text' : 'Colour all text in this box'}
                 >
                   <input
                     type="color"
-                    value={(selectedElement as TextElement).color || '#000000'}
-                    onChange={(e) => onUpdateSelectedElement({ color: e.target.value })}
+                    value={currentColor}
+                    onChange={(e) => {
+                      if (!formatActiveTextSelection({ color: e.target.value })) {
+                        applyToWholeElement({ color: e.target.value });
+                      }
+                    }}
                     className="opacity-0 w-0 h-0 absolute"
                   />
                 </label>

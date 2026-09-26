@@ -26,6 +26,7 @@ import {
   LinkElement
 } from '../types/editor';
 import { renderPdfPage, extractPageTextItems, ExtractedTextItem } from '../lib/pdfRenderer';
+import { RichTextEditor } from './RichTextEditor';
 
 // Helper to generate smooth Catmull-Rom/quadratic bezier SVG path data from normalized percentage points
 function generateSmoothPathData(points: { x: number; y: number }[], width: number, height: number): string {
@@ -229,11 +230,22 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
     // 2. Editable TextElement in place
     const textId = 'el_txt_' + Math.random().toString(36).substr(2, 9);
+
+    // Carry the source line's per-segment styling across, but only when the run
+    // text still lines up with the string. The OCR pass rewrites `str`, and a
+    // length change would shift every run boundary, so mismatches fall back to
+    // the line's uniform style.
+    const runsAlign =
+      !!item.runs &&
+      item.runs.length > 0 &&
+      item.runs.reduce((sum, r) => sum + r.text.length, 0) === item.str.length;
+
     const newText: TextElement = {
       id: textId,
       pageIndex: pageInfo.pageIndex,
       type: 'text',
       text: item.str,
+      runs: runsAlign ? item.runs : undefined,
       x: item.xPct,
       y: Math.max(0, item.yPct - yOffset),
       width: Math.min(100 - item.xPct, item.widthPct + (isDevanagari ? 2.5 : 1.2)),
@@ -241,8 +253,8 @@ export const PageEditor: React.FC<PageEditorProps> = ({
       fontSize: item.fontSize || 14,
       fontFamily: isDevanagari ? hindiFont : (item.fontFamily || 'Arial, Helvetica, sans-serif'),
       color: '#000000',
-      isBold: !!item.isBold,
-      isItalic: !!item.isItalic,
+      isBold: runsAlign ? false : !!item.isBold,
+      isItalic: runsAlign ? false : !!item.isItalic,
       isUnderline: false,
       align: 'left',
     };
@@ -679,7 +691,7 @@ export const PageEditor: React.FC<PageEditorProps> = ({
 
                 {/* 2. TEXT */}
                 {el.type === 'text' && (
-                  <div className="relative w-full h-full flex items-start">
+                  <div className="relative w-full h-full">
                     {/* Move grip handle on top when selected */}
                     {isSelected && (
                       <div
@@ -703,115 +715,16 @@ export const PageEditor: React.FC<PageEditorProps> = ({
                       </div>
                     )}
 
-                    {el.text.includes('\n') ? (
-                      <>
-                        {/* Hidden mirror span to measure true text width for this font/weight */}
-                        <span
-                          aria-hidden
-                          className="absolute invisible whitespace-pre pointer-events-none"
-                          style={{
-                            fontSize: `${(el.fontSize || 14) * zoom}px`,
-                            fontWeight: el.isBold ? 700 : 400,
-                            fontStyle: el.isItalic ? 'italic' : 'normal',
-                            fontFamily:
-                              el.fontFamily ||
-                              (el.text && /[\u0900-\u097F]/.test(el.text)
-                                ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
-                                : 'Arial, Helvetica, sans-serif'),
-                            lineHeight: 1.2,
-                          }}
-                        >
-                          {el.text || ' '}
-                        </span>
-                        <textarea
-                          ref={(node) => {
-                            if (node && isSelected && document.activeElement !== node) {
-                              node.focus({ preventScroll: true });
-                              const len = node.value.length;
-                              node.setSelectionRange(len, len);
-                            }
-                          }}
-                          value={el.text}
-                          onChange={(e) =>
-                            onUpdateElement(el.id, { text: e.target.value })
-                          }
-                          onBlur={(e) => {
-                            if (!e.target.value.trim()) onDeleteElement(el.id);
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                          rows={Math.max(1, el.text.split('\n').length)}
-                          className="outline-none bg-transparent border-none p-0 m-0 resize-none cursor-text select-text overflow-hidden"
-                          style={{
-                            fontSize: `${(el.fontSize || 14) * zoom}px`,
-                            color: el.color || '#000000',
-                            fontWeight: el.isBold ? 700 : 400,
-                            fontStyle: el.isItalic ? 'italic' : 'normal',
-                            textDecoration: el.isUnderline ? 'underline' : 'none',
-                            textAlign: el.align || 'left',
-                            fontFamily:
-                              el.fontFamily ||
-                              (el.text && /[\u0900-\u097F]/.test(el.text)
-                                ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
-                                : 'Arial, Helvetica, sans-serif'),
-                            lineHeight: 1.25,
-                            padding: '0 2px',
-                            letterSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.01em' : 'normal',
-                            wordSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.04em' : 'normal',
-                            width: '100%',
-                            minWidth: '40px',
-                          }}
-                        />
-                      </>
-                    ) : (
-                      <input
-                        ref={(node) => {
-                          if (node && isSelected && document.activeElement !== node) {
-                            node.focus({ preventScroll: true });
-                            const len = node.value.length;
-                            node.setSelectionRange(len, len);
-                          }
-                        }}
-                        type="text"
-                        value={el.text}
-                        onChange={(e) =>
-                          onUpdateElement(el.id, { text: e.target.value })
-                        }
-                        onBlur={(e) => {
-                          if (!e.target.value.trim()) onDeleteElement(el.id);
-                        }}
-                        onPointerDown={(e) => {
-                          e.stopPropagation();
-                          onSelectElement(el.id);
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectElement(el.id);
-                        }}
-                        className="outline-none bg-transparent border-none p-0 m-0 cursor-text select-text block"
-                        style={{
-                          fontSize: `${(el.fontSize || 14) * zoom}px`,
-                          color: el.color || '#000000',
-                          fontWeight: el.isBold ? 700 : 400,
-                          fontStyle: el.isItalic ? 'italic' : 'normal',
-                          textDecoration: el.isUnderline ? 'underline' : 'none',
-                          textAlign: el.align || 'left',
-                          fontFamily:
-                            el.fontFamily ||
-                            (el.text && /[\u0900-\u097F]/.test(el.text)
-                              ? '"Noto Sans Devanagari", "Mangal", "Nirmala UI", "Segoe UI", Arial, sans-serif'
-                              : 'Arial, Helvetica, sans-serif'),
-                          lineHeight: 1.28,
-                          padding: '0 1px',
-                          margin: 0,
-                          letterSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.012em' : 'normal',
-                          wordSpacing: el.text && /[\u0900-\u097F]/.test(el.text) ? '0.06em' : 'normal',
-                          boxSizing: 'border-box',
-                          width: '100%',
-                          minWidth: '30px',
-                        }}
-                      />
-                    )}
+                    <RichTextEditor
+                      element={el}
+                      isSelected={isSelected}
+                      zoom={zoom}
+                      onChange={(id, updates) => onUpdateElement(id, updates)}
+                      onFocusSelect={(id) => {
+                        if (selectedElementId !== id) onSelectElement(id);
+                      }}
+                      onEmptyBlur={(id) => onDeleteElement(id)}
+                    />
                   </div>
                 )}
 

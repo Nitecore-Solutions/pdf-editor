@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Navbar } from './Navbar';
 import { Toolbar } from './Toolbar';
 import { PageEditor } from './PageEditor';
@@ -125,13 +125,35 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [pdfBytes, elements.length]);
 
-  // Push new state to history
+  // Push new state to history.
+  //
+  // `coalesceKey` lets rapid successive edits of the same thing (typing a word,
+  // dragging a box) collapse into one undo step instead of one step per
+  // keystroke. Without it every character produced a full-document re-render and
+  // a history entry, which is what made text selection feel unstable.
+  const lastCoalesce = useRef<{ key: string; at: number } | null>(null);
   const recordHistory = useCallback(
-    (newElements: EditorElement[]) => {
-      const nextHistory = history.slice(0, historyIndex + 1);
-      nextHistory.push(newElements);
-      setHistory(nextHistory);
-      setHistoryIndex(nextHistory.length - 1);
+    (newElements: EditorElement[], coalesceKey?: string) => {
+      const now = Date.now();
+      const canCoalesce =
+        !!coalesceKey &&
+        lastCoalesce.current?.key === coalesceKey &&
+        now - lastCoalesce.current.at < 900 &&
+        historyIndex > 0;
+
+      if (canCoalesce) {
+        const nextHistory = history.slice(0, historyIndex);
+        nextHistory[nextHistory.length - 1] = newElements;
+        setHistory(nextHistory);
+        setHistoryIndex(nextHistory.length - 1);
+      } else {
+        const nextHistory = history.slice(0, historyIndex + 1);
+        nextHistory.push(newElements);
+        setHistory(nextHistory);
+        setHistoryIndex(nextHistory.length - 1);
+      }
+
+      lastCoalesce.current = coalesceKey ? { key: coalesceKey, at: now } : null;
     },
     [history, historyIndex]
   );
@@ -152,7 +174,10 @@ export const PdfEditor: React.FC<PdfEditorProps> = ({
       el.id === id ? ({ ...el, ...updates } as EditorElement) : el
     );
     setElements(updated);
-    recordHistory(updated);
+    // Text typing and dragging coalesce; everything else gets its own step.
+    const isContinuous =
+      'text' in updates || 'x' in updates || 'y' in updates || 'width' in updates || 'height' in updates;
+    recordHistory(updated, isContinuous ? `edit:${id}` : undefined);
   };
 
   // Delete an element

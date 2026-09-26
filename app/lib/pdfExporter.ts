@@ -1,5 +1,6 @@
-import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
-import { EditorElement, PageInfo, DrawingElement } from '../types/editor';
+import { PDFDocument, rgb, degrees, StandardFonts, PDFFont } from 'pdf-lib';
+import { EditorElement, PageInfo, DrawingElement, TextRun } from '../types/editor';
+import { getRuns, runsToText, splitRunsIntoLines, normalizeHexColor } from './richText';
 
 // Helper to convert hex color string (#RRGGBB) to pdf-lib rgb(r, g, b)
 function hexToRgb(hex: string) {
@@ -22,13 +23,11 @@ function dataUrlToBytes(dataUrl: string): Uint8Array {
   return bytes;
 }
 
-// High-resolution fallback for rendering Unicode (Hindi / Devanagari / Special symbols) to PNG
+// High-resolution fallback for rendering Unicode (Hindi / Devanagari / Special symbols) to PNG.
+// Draws run by run so that range-scoped bold/italic/colour survive the raster fallback.
 function renderTextToCanvasPng(
-  text: string,
+  runs: TextRun[],
   fontSizePt: number,
-  color: string,
-  isBold: boolean,
-  isItalic: boolean,
   fontFamily: string,
   boxWidthPt: number,
   align: string = 'left'
@@ -39,16 +38,26 @@ function renderTextToCanvasPng(
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    const fontStyle = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${Math.round(fontSizePt * scale)}px ${
-      fontFamily || 'Arial, sans-serif'
-    }`;
-    ctx.font = fontStyle;
+    const fontFor = (r: TextRun) =>
+      `${r.isItalic ? 'italic ' : ''}${r.isBold ? 'bold ' : ''}${Math.round(
+        fontSizePt * scale
+      )}px ${fontFamily || 'Arial, sans-serif'}`;
 
-    const lines = text.split('\n');
+    const lines = splitRunsIntoLines(runs);
+    const measure = (lineRuns: TextRun[]) => {
+      let w = 0;
+      for (const r of lineRuns) {
+        if (!r.text) continue;
+        ctx.font = fontFor(r);
+        w += ctx.measureText(r.text).width;
+      }
+      return w;
+    };
+
     let maxLineWidth = 0;
-    for (const l of lines) {
-      const m = ctx.measureText(l);
-      if (m.width > maxLineWidth) maxLineWidth = m.width;
+    for (const lineRuns of lines) {
+      const m = measure(lineRuns);
+      if (m > maxLineWidth) maxLineWidth = m;
     }
 
     const w = Math.max(Math.round(boxWidthPt * scale), Math.round(maxLineWidth) + 20);
@@ -59,20 +68,27 @@ function renderTextToCanvasPng(
     canvas.width = w;
     canvas.height = h;
 
-    ctx.font = fontStyle;
-    ctx.fillStyle = color || '#000000';
     ctx.textBaseline = 'top';
 
-    lines.forEach((line, idx) => {
+    lines.forEach((lineRuns, idx) => {
+      const lineW = measure(lineRuns);
       let x = 0;
-      if (align === 'center') {
-        const textW = ctx.measureText(line).width;
-        x = (w - textW) / 2;
-      } else if (align === 'right') {
-        const textW = ctx.measureText(line).width;
-        x = w - textW;
+      if (align === 'center') x = (w - lineW) / 2;
+      else if (align === 'right') x = w - lineW;
+
+      for (const r of lineRuns) {
+        if (!r.text) continue;
+        ctx.font = fontFor(r);
+        ctx.fillStyle = r.color || '#000000';
+        ctx.fillText(r.text, x, topPadding + idx * lineHeightPx);
+        if (r.isUnderline) {
+          const prev = ctx.fillStyle;
+          ctx.fillRect(x, topPadding + idx * lineHeightPx + fontSizePt * scale * 1.05,
+            ctx.measureText(r.text).width, Math.max(1, Math.round(fontSizePt * scale * 0.06)));
+          ctx.fillStyle = prev;
+        }
+        x += ctx.measureText(r.text).width;
       }
-      ctx.fillText(line, x, topPadding + idx * lineHeightPx);
     });
 
     const dataUrl = canvas.toDataURL('image/png');
@@ -218,60 +234,89 @@ export async function exportModifiedPdf({
           borderWidth: 0,
         });
       } else if (el.type === 'text') {
-        let fontToUse = helveticaFont;
-        if (el.fontFamily?.includes('Times')) fontToUse = timesFont;
-        else if (el.fontFamily?.includes('Courier')) fontToUse = courierFont;
-        else if (el.isBold && el.isItalic) fontToUse = helveticaBoldOblique;
-        else if (el.isBold) fontToUse = helveticaBold;
-        else if (el.isItalic) fontToUse = helveticaOblique;
-
-        // Convert UI font size (96 DPI CSS px) to PDF standard 72 pt font size
+        // Range-scoped styling: each run carries its own weight/slant/colour.
         const fontSizePt = Math.max(4, (el.fontSize || 14) / 1.3333);
-        const textColor = hexToRgb(el.color || '#000000');
-        const lines = (el.text || '').split('\n');
         const lineHeight = fontSizePt * 1.2;
+        const runs = getRuns(el);
+        const lineRunsList = splitRunsIntoLines(runs);
+        const baseColor = normalizeHexColor(el.color);
 
-        // Verify if all lines can be encoded directly with WinAnsi
-        let canEncodeDirectly = true;
-        try {
-          for (const line of lines) {
-            fontToUse.encodeText(line);
+        const pickFont = (isBold: boolean, isItalic: boolean): PDFFont => {
+          // Times/Courier only have the regular face embedded (matching the
+          // previous behaviour); the Helvetica family covers all four styles.
+          if (el.fontFamily?.includes('Times')) return timesFont;
+          if (el.fontFamily?.includes('Courier')) return courierFont;
+          if (isBold && isItalic) return helveticaBoldOblique;
+          if (isBold) return helveticaBold;
+          if (isItalic) return helveticaOblique;
+          return helveticaFont;
+        };
+
+        const canEncodeDirectly = (() => {
+          try {
+            for (const r of runs) {
+              if (r.text) pickFont(!!r.isBold, !!r.isItalic).encodeText(r.text);
+            }
+            return true;
+          } catch (_) {
+            return false;
           }
-        } catch (_) {
-          canEncodeDirectly = false;
-        }
+        })();
 
         if (canEncodeDirectly) {
-          lines.forEach((line, lineIndex) => {
-            if (!line.trim() && lines.length === 1) return;
+          lineRunsList.forEach((lineRuns, lineIndex) => {
+            const lineText = runsToText(lineRuns);
+            if (!lineText.trim() && lineRunsList.length === 1) return;
             const lineY = pageHeight - (el.y / 100) * pageHeight - (lineIndex + 0.85) * lineHeight;
 
-            let lineX = elX;
+            const lineWidth = lineRuns.reduce((sum, r) => {
+              if (!r.text) return sum;
+              return sum + pickFont(!!r.isBold, !!r.isItalic).widthOfTextAtSize(r.text, fontSizePt);
+            }, 0);
+
+            let x = elX;
             if (el.align === 'center') {
-              const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
-              lineX = elX + (elWidth - textWidth) / 2;
+              x = elX + (elWidth - lineWidth) / 2;
             } else if (el.align === 'right') {
-              const textWidth = fontToUse.widthOfTextAtSize(line, fontSizePt);
-              lineX = elX + elWidth - textWidth;
+              x = elX + elWidth - lineWidth;
             }
 
-            pdfPage.drawText(line, {
-              x: Math.max(0, lineX),
-              y: Math.max(0, lineY),
-              size: fontSizePt,
-              font: fontToUse,
-              color: textColor,
-            });
+            for (const r of lineRuns) {
+              if (!r.text) continue;
+              const font = pickFont(!!r.isBold, !!r.isItalic);
+              const runWidth = font.widthOfTextAtSize(r.text, fontSizePt);
+              const drawX = Math.max(0, x);
+              const drawY = Math.max(0, lineY);
+
+              pdfPage.drawText(r.text, {
+                x: drawX,
+                y: drawY,
+                size: fontSizePt,
+                font,
+                color: hexToRgb(r.color || baseColor),
+              });
+
+              // Underline is a run-level property, so it has to be drawn here;
+              // previously it was rendered on screen but silently dropped on export.
+              if (r.isUnderline) {
+                const thickness = Math.max(0.5, fontSizePt * 0.06);
+                pdfPage.drawLine({
+                  start: { x: drawX, y: drawY - fontSizePt * 0.12 },
+                  end: { x: drawX + runWidth, y: drawY - fontSizePt * 0.12 },
+                  thickness,
+                  color: hexToRgb(r.color || baseColor),
+                });
+              }
+
+              x += runWidth;
+            }
           });
         } else {
           // Unicode / Hindi / Complex script fallback via high-res PNG embedding
           try {
             const pngBytes = renderTextToCanvasPng(
-              el.text,
+              runs,
               fontSizePt,
-              el.color || '#000000',
-              !!el.isBold,
-              !!el.isItalic,
               el.fontFamily || 'Arial, sans-serif',
               elWidth,
               el.align || 'left'
@@ -421,11 +466,15 @@ export async function exportModifiedPdf({
               });
             } catch (_) {
               const pngBytes = renderTextToCanvasPng(
-                el.value,
+                [
+                  {
+                    text: String(el.value ?? ''),
+                    isBold: !!el.isBold,
+                    isItalic: !!el.isItalic,
+                    color: el.color || '#000000',
+                  },
+                ],
                 fontSizePt,
-                el.color || '#000000',
-                !!el.isBold,
-                !!el.isItalic,
                 el.fontFamily || 'Arial, sans-serif',
                 elWidth
               );
