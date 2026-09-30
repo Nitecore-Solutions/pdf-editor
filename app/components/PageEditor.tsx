@@ -250,11 +250,12 @@ export const PageEditor: React.FC<PageEditorProps> = ({
     // the glyph origin and takes `padX - padLeft` as its width, which puts its
     // right edge on the whiteout's right edge.
     //
-    // The text box used to add more than this (2.5%/1.2% against the whiteout's
-    // 2.0%/0.8%), because it was `max-content` and needed room to grow into. It
-    // is pinned now, so matching the whiteout is both possible and correct.
-    const padLeft = 0.15;
-    const padX = isDevanagari ? 2.0 : 0.8;
+    // A cell gets almost none. The figures below are sized for a full-width
+    // line, where a couple of percent is invisible; on a grid cell the same
+    // padding is a large share of the cell and the selection outline would
+    // reach across the border into the next column.
+    const padLeft = item.isCell ? 0.05 : 0.15;
+    const padX = item.isCell ? 0.3 : isDevanagari ? 2.0 : 0.8;
 
     const whiteout: WhiteoutElement = {
       id: whiteoutId,

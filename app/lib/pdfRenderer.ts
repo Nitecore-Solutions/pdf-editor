@@ -176,6 +176,170 @@ export function verticalMetricsFor(
   return { ascentEm, descentEm };
 }
 
+/**
+ * Table detection and per-cell clustering.
+ *
+ * Rows are clustered by baseline, and every cell in a table row shares a
+ * baseline - so a naive "line" is the whole row of the table. "AI", "AI की सहाय"
+ * and "Before/After" become one string in one box spanning the full width, the
+ * overlay then draws that merged string across the cells, and the text collides
+ * with its neighbours. A table is only editable if each cell is kept apart.
+ *
+ * A divider is found from two facts at once, and both are needed:
+ *
+ *   1. the gap in front of it is wide. A word space is a fraction of the page; a
+ *      column separation is several percent.
+ *   2. the item after it starts in the same place on more than one row. This is
+ *      what separates a grid from a paragraph, where the gaps are all word-sized,
+ *      and from a bulleted list, where the gap between the bullet and its text
+ *      *is* in the same place every time - which is why the width test alone is
+ *      not enough.
+ *
+ * The divider is placed at the left edge of the item that follows the wide gap,
+ * not in the middle of the gap. A cell's text starts at a fixed inset from the
+ * column, so that edge repeats exactly; the middle of the gap moves as the cell
+ * above it changes length, which is enough to hide a real table.
+ *
+ * Anchoring on the left edge is safe here precisely because of the width test: a
+ * second word *inside* a cell also sits at a repeating x, but it is never
+ * preceded by a wide gap, so it can never be mistaken for a column. That is the
+ * combination an earlier attempt was missing.
+ *
+ * Whitespace-only items are dropped first, because a cell boundary is often
+ * written as a real space item, and counting that space as a word gap would hide
+ * the very gap being looked for.
+ *
+ * The geometry is script-agnostic - it runs on positions, before any Devanagari
+ * handling - so a bilingual table needs nothing extra.
+ */
+
+/** A column separation is at least this much of the page width. */
+const MIN_DIVIDER_GAP_PCT = 2.5;
+/** Two divider positions within this distance are the same divider. */
+const DIVIDER_TOL_PCT = 1.5;
+/** A divider must land on at least this many rows. */
+const MIN_DIVIDER_ROWS = 2;
+
+/** The text-bearing items of a row, in reading order. */
+function rowContent(row: any[]): any[] {
+  return row.filter((it) => it.str && it.str.trim()).sort((a, b) => a.xPct - b.xPct);
+}
+
+/**
+ * Split the rows into per-cell groups, or return null when the page is prose.
+ *
+ * Cells come back in reading order - each row left to right, rows top to
+ * bottom - so ids follow the page.
+ */
+export function detectTableCells(rows: any[][]): any[][] | null {
+  // bucket -> the rows that agree on a divider there, and where they put it.
+  const dividerRows = new Map<number, Set<number>>();
+  const dividerXs = new Map<number, number[]>();
+
+  rows.forEach((row, rowIndex) => {
+    const items = rowContent(row);
+    for (let k = 1; k < items.length; k++) {
+      const left = items[k - 1];
+      const right = items[k];
+      const gap = right.xPct - (left.xPct + left.widthPct);
+      if (gap < MIN_DIVIDER_GAP_PCT) continue;
+      // The right cell's text edge, which repeats from row to row.
+      const bucket = Math.round(right.xPct / DIVIDER_TOL_PCT);
+      let seen = dividerRows.get(bucket);
+      if (!seen) {
+        dividerRows.set(bucket, (seen = new Set()));
+        dividerXs.set(bucket, []);
+      }
+      seen.add(rowIndex);
+      dividerXs.get(bucket)!.push(right.xPct);
+    }
+  });
+
+  const dividers = [...dividerRows.entries()]
+    .filter(([, seen]) => seen.size >= MIN_DIVIDER_ROWS)
+    // The median of the reported edges, not the middle of the bucket: rounding
+    // to the bucket would push the divider past the very item it describes, and
+    // that item would land back in the cell to its left.
+    .map(([bucket]) => {
+      const xs = dividerXs.get(bucket)!;
+      const sorted = [...xs].sort((a, b) => a - b);
+      return sorted[sorted.length >> 1];
+    })
+    .sort((a, b) => a - b);
+
+  if (!dividers.length) return null;
+
+  // A cell is whatever lies between two dividers. Counting the dividers at or
+  // just left of each item keeps groups contiguous in x, and text that overflows
+  // its own column lands in the next group rather than being merged into a cell
+  // it does not belong to. The half-tolerance slack absorbs a cell whose text
+  // starts a hair left of the edge the other rows reported.
+  const cells: any[][] = [];
+  for (const row of rows) {
+    const items = rowContent(row);
+    if (!items.length) continue;
+    let current: any[] = [];
+    let currentCell = -1;
+    for (const item of items) {
+      let cell = 0;
+      for (const d of dividers) if (d - DIVIDER_TOL_PCT / 2 <= item.xPct) cell++;
+      if (cell !== currentCell) {
+        if (current.length) cells.push(current);
+        current = [item];
+        currentCell = cell;
+      } else {
+        current.push(item);
+      }
+    }
+    if (current.length) cells.push(current);
+  }
+
+  return cells;
+}
+
+/**
+ * Trim the outer whitespace off a run list so the runs concatenate to exactly
+ * `text`.
+ *
+ * The line's text is trimmed but the runs are built from the untrimmed pieces,
+ * and pdf.js emits whitespace-only items at both ends of a line. The two
+ * therefore disagree by a character or two - and PageEditor treats a length
+ * mismatch as proof that the runs no longer describe the line, so it throws them
+ * away and renders the whole line in one uniform weight. That is what silently
+ * flattened the bold fragment in a line like
+ *
+ *   "We are pleased to offer you the position of " + BOLD("Web & App Developer")
+ *
+ * leaving no bold anywhere in it. Because it depends on whether a line happens
+ * to end in a space item, it looked random from one line to the next.
+ *
+ * Trimming the outermost runs restores the invariant every consumer relies on:
+ * runsToText(runs) === text.
+ */
+export function trimRunsToText(runs: TextRun[], text: string): TextRun[] {
+  const out = runs.map((r) => ({ ...r }));
+
+  while (out.length) {
+    const trimmed = out[0].text.replace(/^\s+/, '');
+    out[0].text = trimmed;
+    if (trimmed) break;
+    out.shift();
+  }
+  while (out.length) {
+    const last = out[out.length - 1];
+    const trimmed = last.text.replace(/\s+$/, '');
+    last.text = trimmed;
+    if (trimmed) break;
+    out.pop();
+  }
+
+  // Belt and braces: if anything still disagrees, the caller would discard these
+  // runs anyway, so drop them deliberately rather than hand over a line whose
+  // styling is about to be thrown away.
+  const joined = out.map((r) => r.text).join('');
+  return joined === text ? out : [];
+}
+
 export interface ExtractedTextItem {
   id: string;
   str: string;
@@ -195,6 +359,8 @@ export interface ExtractedTextItem {
   /** Structural Devanagari problems; drives the model-assisted repair gate. */
   devanagariIssues?: string[];
   baselinePct?: number;
+  /** True when this item is a single cell of a detected grid, not a whole line. */
+  isCell?: boolean;
 }
 
 export async function extractPageTextItems(
@@ -479,8 +645,18 @@ function orderItemsForLogicalText(line: any[]): any[] {
   return out;
 }
 
-  // 2. Assemble each clustered line into a single cohesive line item spanning full width
-  const merged: ExtractedTextItem[] = lines.map((line, idx) => {
+  // 2. Assemble each group into a single cohesive text item.
+  //
+  // For ordinary prose a group is a line and the result spans the full width,
+  // which is right. In a table a line is a whole *row* of cells that share a
+  // baseline, and spanning the full width is exactly the bug: the merged string
+  // is then drawn across the cells and collides with them. So when the page
+  // really is a grid, the groups are the cells.
+  const cells = detectTableCells(lines);
+  const isTablePage = cells !== null;
+  const groups = cells ?? lines;
+
+  const merged: ExtractedTextItem[] = groups.map((line, idx) => {
     // Sort by x, but only when the difference is meaningful.
     //
     // Some items come back with a width of 0 because pdf.js cannot measure a
@@ -608,12 +784,15 @@ function orderItemsForLogicalText(line: any[]): any[] {
     const allItalic = repairedPieces.every((p) => p.isItalic);
     const mixed = !allBold || !allItalic;
     const lineRuns: TextRun[] | undefined = mixed
-      ? repairedPieces.map((p) => ({
-          text: p.text,
-          isBold: p.isBold,
-          isItalic: p.isItalic,
-          isUnderline: false,
-        }))
+      ? trimRunsToText(
+          repairedPieces.map((p) => ({
+            text: p.text,
+            isBold: p.isBold,
+            isItalic: p.isItalic,
+            isUnderline: false,
+          })),
+          lineText
+        )
       : undefined;
 
     const minX = Math.min(...line.map(b => b.xPct));
@@ -656,6 +835,11 @@ function orderItemsForLogicalText(line: any[]): any[] {
       runs: lineRuns,
       devanagariIssues,
       baselinePct: lineBaselinePct,
+      // Tells the editor this group is one cell of a grid rather than a whole
+      // line, so it can hug the cell's text instead of padding for a full-width
+      // line. On a narrow cell the usual padding is a large fraction of the
+      // cell, and the selection outline would reach into its neighbour.
+      isCell: isTablePage,
     };
   });
 

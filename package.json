@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx tests/hindiRepair.test.mjs && tsx tests/fontStack.test.mjs && tsx tests/noDamage.mjs"
+    "test": "tsx tests/hindiRepair.test.mjs && tsx tests/fontStack.test.mjs && tsx tests/noDamage.mjs && tsx tests/table.test.mjs && tsx tests/boldRuns.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.33.0",
